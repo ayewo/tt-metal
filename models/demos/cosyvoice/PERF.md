@@ -92,6 +92,16 @@ rewrite and the Wormhole convolution fix and had not been re-run since. **That g
 `COSYVOICE_KV_INPLACE=1` reaches `0.342` — see *Environment* above for the full three-board
 re-verification.
 
+**Two measurement methods are mixed in the table above, and the difference matters.** The n300
+`0.559`/`0.557` rows and the `p150b` `0.365` row are **medians** — six runs and four runs
+respectively — because the flow stage varies by ~5 % run to run and a single result there is an
+anecdote. Every `p150a` row, both new `p150b` rows and the n300 `COSYVOICE_KV_INPLACE` row are
+**single runs** from `2026-08-24`. The single-run n300 figures from that day were `0.577` default and
+`0.550` with `COSYVOICE_FF2_GRID=8x2`; both fall inside the `0.557`–`0.583` band the median rows were
+drawn from, which is why those rows are left at their medians rather than replaced by one day's
+result. A median is the better number where it exists; where it does not, the row says so here rather
+than reading as though it were one.
+
 **The single Wormhole test failure is gone.** `test_device_streamed_matches_non_streamed` scored
 mel-space PCC `0.218` on n300 against a `0.85` gate until now; it was a `ttnn.conv1d`
 defect, not a streaming one — see *A Wormhole convolution defect* below. Both architectures now
@@ -102,6 +112,11 @@ pass every device test.
 Blackhole `p150a`, default settings — the configuration the rest of this document's narrative is
 built on. The best measured configuration is `p150a` with `COSYVOICE_KV_INPLACE=1`; see *Blackhole
 and Wormhole side by side* for the cross-architecture comparison.
+
+The per-stage split below is from the `2026-08-18` run, which totalled `0.377`. The `2026-08-24`
+re-verification measured the same configuration at `0.378` — within run-to-run noise — but did not
+re-derive the per-stage breakdown, so the shares here are the earlier run's and are left as measured
+rather than rescaled to a total they were not taken from.
 
 | Stage | Cost | RTF | Share |
 |---|---:|---:|---:|
