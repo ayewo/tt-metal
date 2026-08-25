@@ -41,6 +41,16 @@ environment table stops meaning anything:
 - **the Wormhole re-verification and `COSYVOICE_KV_INPLACE` default switch (`2026-08-18`, same
   branch head)**. n300 was also unreachable for part of that window; see *Wormhole re-verified*
   below for what was re-measured and why.
+- **the full three-board re-verification (`2026-08-24`, commit `fa7ddeb0554`)** — `pcc/`, `e2e/` and
+  all three `perf/` configs (default, `COSYVOICE_FF2_GRID=8x2`, `COSYVOICE_KV_INPLACE=1`) re-run on
+  `p150a`, `p150b` and n300, 146/146 plus 11×3 passing on every board, zero failures. Measured with
+  `models/demos/cosyvoice/` overlaid from a `git archive` of `fa7ddeb0554` onto a C++/ttnn build at
+  `571b1e0395`, rather than a live checkout of `fa7ddeb0554` — sound because the only commits between
+  the two touch `README.md` and `docs/diagrams/`, confirmed by `git diff --stat` before relying on
+  it. `p150a` came from a substitute box (`Tornado`), because `Tavern` — the board behind every prior
+  `p150a` figure in this document — is genuinely PCIe-hung (`Read 0xffffffff over PCIe ID 0`,
+  identical before and after a `tt-smi -r 0` reset attempt), not merely unreachable like the earlier
+  gaps above.
 
 ## Summary metrics
 
@@ -48,17 +58,22 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Metric | Value | Target |
 |---|---:|---:|
-| **End-to-end RTF, best measured** (`p150a` + `COSYVOICE_FF2_GRID=8x2`) | **`0.354`** | `< 0.5` ✅ |
+| **End-to-end RTF, best measured** (`p150a` + `COSYVOICE_KV_INPLACE=1`) | **`0.342`** | `< 0.5` ✅ |
 | End-to-end RTF, `p150b`, everything on | `0.365` | `< 0.5` ✅ |
-| End-to-end RTF, `p150a` default | `0.377` | `< 0.5` ✅ |
-| End-to-end RTF, `p150a` + `COSYVOICE_KV_INPLACE=1` † | `0.449` | `< 0.5` ✅ |
+| End-to-end RTF, `p150b` default | `0.396` | `< 0.5` ✅ |
+| End-to-end RTF, `p150b` + `COSYVOICE_FF2_GRID=8x2` | `0.384` | `< 0.5` ✅ |
+| End-to-end RTF, `p150a` default | `0.378` | `< 0.5` ✅ |
+| End-to-end RTF, `p150a` + `COSYVOICE_FF2_GRID=8x2` | `0.356` | `< 0.5` ✅ |
 | End-to-end RTF, Wormhole n300, default (in-place KV is now default there) | `0.559` | `< 0.5` ❌ |
 | End-to-end RTF, Wormhole n300, default + `COSYVOICE_FF2_GRID=8x2` | `0.557` | `< 0.5` ❌ |
-| **LLM throughput, best measured** (`p150a` + `COSYVOICE_KV_INPLACE=1`) | **`200.8 tok/s`** | `>= 60` ✅ |
-| LLM throughput, `p150b` + in-place KV | `190.8 tok/s` | `>= 60` ✅ |
-| LLM throughput, `p150a` + `COSYVOICE_FF2_GRID=8x2` | `190.0 tok/s` | `>= 60` ✅ |
-| LLM throughput, `p150a` default | `175.1 tok/s` | `>= 60` ✅ |
+| End-to-end RTF, Wormhole n300, + `COSYVOICE_KV_INPLACE=1` explicit | `0.575` | `< 0.5` ❌ |
+| **LLM throughput, best measured** (`p150a` + `COSYVOICE_KV_INPLACE=1`) | **`201.0 tok/s`** | `>= 60` ✅ |
+| LLM throughput, `p150b` + in-place KV | `191.5 tok/s` | `>= 60` ✅ |
+| LLM throughput, `p150b` default | `171.3 tok/s` | `>= 60` ✅ |
+| LLM throughput, `p150a` + `COSYVOICE_FF2_GRID=8x2` | `189.9 tok/s` | `>= 60` ✅ |
+| LLM throughput, `p150a` default | `175.6 tok/s` | `>= 60` ✅ |
 | LLM throughput, n300 default (in-place KV) | `127.6 tok/s` | `>= 60` ✅ |
+| LLM throughput, n300 + `COSYVOICE_KV_INPLACE=1` explicit | `127.5 tok/s` | `>= 60` ✅ |
 | LLM decode latency, best measured (`p150a` + `COSYVOICE_KV_INPLACE=1`) | `4.98 ms` | — |
 | Token agreement, teacher-forced | `99.04 %` | `> 95 %` ✅ |
 | Token agreement, through the KV cache | `100.00 %` | `> 95 %` ✅ |
@@ -68,12 +83,14 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 | Streaming vs non-streamed, mel-space PCC (n300) | `0.9024` | content-equal ✅ |
 | tokens → waveform PCC | `0.9951` | `>= 0.99` ✅ |
 
-† The `COSYVOICE_KV_INPLACE` row alone still predates the GroupNorm rewrite and the Wormhole
-convolution fix; it has not been re-run since that board came back. The two rows above it were
-re-measured on `2026-08-18` at branch head `384c7c6504f` — **`p150a` default moved `0.477 -> 0.377`**,
-a 21 % gain that had been sitting unrecorded while the board was unreachable. That is what the
-footnote was for: it kept a stale figure from reading as current and named what was missing, so the
-gap closed the day the hardware returned.
+The `p150a` default row was re-measured on `2026-08-18` at branch head `384c7c6504f` —
+**`p150a` default moved `0.477 -> 0.377`**, a 21 % gain that had been sitting unrecorded while the
+board was unreachable (now `0.378` at `fa7ddeb0554`, within run-to-run noise of that figure). A
+`COSYVOICE_KV_INPLACE` row used to carry its own footnote here, because it predated the GroupNorm
+rewrite and the Wormhole convolution fix and had not been re-run since. **That gap closed on
+`2026-08-24`**: re-measured at commit `fa7ddeb0554` with every fix landed, `p150a` +
+`COSYVOICE_KV_INPLACE=1` reaches `0.342` — see *Environment* above for the full three-board
+re-verification.
 
 **The single Wormhole test failure is gone.** `test_device_streamed_matches_non_streamed` scored
 mel-space PCC `0.218` on n300 against a `0.85` gate until now; it was a `ttnn.conv1d`
@@ -83,7 +100,7 @@ pass every device test.
 ### RTF breakdown
 
 Blackhole `p150a`, default settings — the configuration the rest of this document's narrative is
-built on. The best measured configuration is `p150a` with `COSYVOICE_FF2_GRID=8x2`; see *Blackhole
+built on. The best measured configuration is `p150a` with `COSYVOICE_KV_INPLACE=1`; see *Blackhole
 and Wormhole side by side* for the cross-architecture comparison.
 
 | Stage | Cost | RTF | Share |
@@ -99,8 +116,11 @@ down with it, while the decode step did not move. Whatever is left to win is in 
 it is a larger share of the total than when this document started.
 
 **`COSYVOICE_KV_INPLACE=1`** writes the KV cache in place with `ttnn.update_cache` instead of
-rebuilding it, taking the decode step to `4.98 ms` (`200.8 tok/s`) and the total to `1.470 s`,
-**RTF `0.449`**. This is the Blackhole account; *Decode step* carries the per-architecture figures,
+rebuilding it, taking the decode step to `4.98 ms` (`201.0 tok/s`) and the total to `1.118 s`,
+**RTF `0.342`** — re-measured `2026-08-24` at commit `fa7ddeb0554`. The decode step itself is
+essentially unchanged (`200.8 -> 201.0 tok/s`), so the drop from the `1.470 s` this paragraph
+originally carried is entirely the flow stage getting cheaper after the permute-free GroupNorm
+landed, not a change to this trade. This is the Blackhole account; *Decode step* carries the per-architecture figures,
 and *Where each change is worth what* explains why the trade runs the other way on Wormhole. It is opt-in because it costs two things the default does not: a 384 MB trace
 region for the 65 traces it captures, and bit-exactness — worst PCC `0.9986` over 72 steps against
 the moving cache's exact `1.0`, non-accumulating. The width it needs has to keep the key axis on an
@@ -135,7 +155,7 @@ Three things about it are worth stating plainly:
   worse than a flag that says so. The Wormhole figure is smaller and has its own account in
   *Wormhole re-verified*; *Tensor parallelism* records why it does not stack with TP.
 
-RTF has come down **1.096 → 0.354** (and **2.120 → 0.354** since before either stage was traced),
+RTF has come down **1.096 → 0.342** (and **2.120 → 0.342** since before either stage was traced),
 and **the `< 0.5` target is met**. The rest of this section is the account of where the time went,
 because the last step of it was the one that had been ruled out on a false premise.
 
@@ -414,7 +434,8 @@ This paragraph used to read: *"neither is reachable by further op-level fusion o
 What would move it is a fused attention kernel (new C++, outside this bring-up's scope)."* The first
 half was right and the second was wrong in a way worth leaving on the record — **the fused attention
 kernel existed already**, and the section above is what it was worth. `RTF < 0.5` was met at `0.477`
-when this was written; it now stands at `0.377`, or `0.354` with `COSYVOICE_FF2_GRID=8x2`.
+when this was written; it now stands at `0.378` default, `0.356` with `COSYVOICE_FF2_GRID=8x2`, or
+`0.342` with `COSYVOICE_KV_INPLACE=1` — the current best.
 
 `RTF < 0.2` needs `0.654 s`, which at 164 tokens is under `1.5 ms` per token for the LLM. The flow
 stage has since more than halved — `0.589 -> 0.253 s`, `0.077` of RTF — so it no longer consumes the
@@ -715,25 +736,30 @@ reads top to bottom as the order the work landed.
 | **+ fused decode attention** | **`0.477`** ✅ | `0.523` | `0.891` |
 | **+ cached CFM trace** | *`0.367` projected* | **`0.436`** ✅ | — |
 | **+ in-place KV** (`COSYVOICE_KV_INPLACE=1`) | `0.449`* ✅ | `0.398` ✅ | `0.628` |
-| **+ permute-free GroupNorm** (and, on n300, the conv fix) | — | **`0.365`** ✅ | **`0.575`** |
+| **+ permute-free GroupNorm** (and, on n300, the conv fix) | **`0.342`** ✅* | **`0.365`** ✅ | **`0.575`** |
 
-**Best in this table: `0.365` on Blackhole `p150b`, `0.575` on Wormhole.** Both are superseded
-elsewhere in this document — `p150a` reaches `0.354` with `COSYVOICE_FF2_GRID=8x2` (*Summary
-metrics*), and the Wormhole figure was re-measured at `0.559` under the flag set that actually
-produced it (*Wormhole re-verified*). `RTF < 0.5` is met on both
-Blackhole boards and missed on Wormhole.
+**Best in this table: `0.342` on Blackhole `p150a`, with `COSYVOICE_KV_INPLACE=1` still applied.**
+The `p150a` cell above was the one genuine gap in this table — filled `2026-08-24` on commit
+`fa7ddeb0554`, the day a substitute box (`Tornado`, since `Tavern` is PCIe-hung) made a `p150a`
+re-measurement possible. `RTF < 0.5` remains met on both Blackhole boards and missed on Wormhole in
+this specific table; the Wormhole figure that does clear the bar lives elsewhere, under a different
+flag set (*Wormhole re-verified*).
 
-The last row is a **median over four runs on `p150b` (`0.362`–`0.368`) and six on n300
-(`0.557`–`0.583`)**, not a single result. Every row above it is a single run, which was fine while
-changes were worth 10–20 % but is not fine for the flow stage: it varies by ~5 % run to run on n300
-(`0.480`–`0.513 s`), and the first number this row was written with — `0.557` — was the best of the
-set rather than the middle of it. Where a change and the noise are the same order, one run is an
-anecdote.
+The `p150b` and n300 rows are each a **median over four runs on `p150b` (`0.362`–`0.368`) and six on
+n300 (`0.557`–`0.583`)**, not a single result; every other row, including the new `p150a` figure, is
+a single run. That was fine while changes were worth 10–20 % but is not fine for the flow stage: it
+varies by ~5 % run to run on n300 (`0.480`–`0.513 s`), and the first number the n300 row was written
+with — `0.557` — was the best of the set rather than the middle of it. Where a change and the noise
+are the same order, one run is an anecdote.
 
-*The `p150a` in-place figure is measured **without** the CFM trace cache, which did not exist when
-that box was last reachable — it is `0.449`, not a fully-loaded number. The `0.367` above it is the
-only projection in this document: `p150a`'s flow stage scaled by the `1.81×` the cache is measured to
-give on `p150b`. Everything else here was run.
+*Both `p150a` cells above share this footnote. The in-place-KV row's `0.449` was measured
+**without** the CFM trace cache, which did not exist when that box was last reachable — not a
+fully-loaded number. The permute-free-GroupNorm row's `0.342` **is** fully loaded: re-measured
+`2026-08-24` at commit `fa7ddeb0554` on a substitute box (`Tornado`, since `Tavern` is PCIe-hung),
+with fused attention, cached CFM trace and permute-free GroupNorm all landed, plus
+`COSYVOICE_KV_INPLACE=1` on top — the gap this table carried since `p150a` first went unreachable.
+The `0.367` above both of them is the only projection in this document: `p150a`'s flow stage scaled
+by the `1.81×` the cache is measured to give on `p150b`. Everything else here was run.
 
 ### Where each change is worth what
 
