@@ -740,8 +740,7 @@ reads top to bottom as the order the work landed.
 
 **Best in this table: `0.342` on Blackhole `p150a`, with `COSYVOICE_KV_INPLACE=1` still applied.**
 The `p150a` cell above was the one genuine gap in this table — filled `2026-08-24` on commit
-`fa7ddeb0554`, the day a substitute box (`Tornado`, since `Tavern` is PCIe-hung) made a `p150a`
-re-measurement possible. `RTF < 0.5` remains met on both Blackhole boards and missed on Wormhole in
+`fa7ddeb0554` (see *Environment* above for how). `RTF < 0.5` remains met on both Blackhole boards and missed on Wormhole in
 this specific table; the Wormhole figure that does clear the bar lives elsewhere, under a different
 flag set (*Wormhole re-verified*).
 
@@ -755,9 +754,9 @@ are the same order, one run is an anecdote.
 *Both `p150a` cells above share this footnote. The in-place-KV row's `0.449` was measured
 **without** the CFM trace cache, which did not exist when that box was last reachable — not a
 fully-loaded number. The permute-free-GroupNorm row's `0.342` **is** fully loaded: re-measured
-`2026-08-24` at commit `fa7ddeb0554` on a substitute box (`Tornado`, since `Tavern` is PCIe-hung),
-with fused attention, cached CFM trace and permute-free GroupNorm all landed, plus
-`COSYVOICE_KV_INPLACE=1` on top — the gap this table carried since `p150a` first went unreachable.
+`2026-08-24` at commit `fa7ddeb0554` with fused attention, cached CFM trace and permute-free
+GroupNorm all landed, plus `COSYVOICE_KV_INPLACE=1` on top — the gap this table carried since
+`p150a` first went unreachable.
 The `0.367` above both of them is the only projection in this document: `p150a`'s flow stage scaled
 by the `1.81×` the cache is measured to give on `p150b`. Everything else here was run.
 
