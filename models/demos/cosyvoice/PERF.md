@@ -66,10 +66,11 @@ The n300 result is one Wormhole B0 chip — nothing in this port is multi-chip.
 | `pcc` + `e2e` | 150 | `/dev/tenstorrent` | 149 passed, 1 skipped, on all three boards |
 | `perf` | 14 | `/dev/tenstorrent` | 14 passed, on each of the three configurations, on all three boards |
 
-The device tier re-runs the host tier (it lives in `tests/pcc/`), which is why 150 is
-not 113 + 37. One test is skipped with its reason attached — end-to-end batched
-synthesis, blocked by a pre-existing device defect; `docs/VALIDATION.md` has the
-account.
+150 is the 113 host-tier tests re-run with a device attached, plus the 37 that need one
+— the host tier lives in `tests/pcc/`, so collecting `tests/pcc/ tests/e2e/` picks it up
+again. `tests/` collects 164 in total: 113 host and 51 device, of which 14 are the `perf`
+tier above. One test is skipped with its reason attached — end-to-end batched synthesis,
+blocked by a pre-existing device defect; `docs/VALIDATION.md` has the account.
 
 **The three boards now run the same tests.** Until 2026-09-03 n300 skipped two more —
 both of the tests that drive the *interleaved* streaming schedule, one in `e2e` and one
