@@ -151,25 +151,29 @@ class Misses:
 # `p150a`/`p150b` pair -- the two differ by ~5 % through cooling, so the bands below
 # are the union of both rather than one board's.
 BLACKHOLE = {
-    # End-to-end traced decode: 174.8 tok/s default on p150a, 168.5 on p150b, 201.3 with
-    # the in-place KV cache. Every configuration clears both gates by a wide margin.
+    # End-to-end traced decode clears both gates in every configuration on both boards,
+    # by a factor approaching three against the stretch target. PERF.md section 3.3 has
+    # the figures; they are not repeated here, because a comment that restates a
+    # published number is a second place for it to go stale.
     "tok_s": Meets(),
     "tok_s_stretch": Meets(),
-    # 0.379 default on p150a, 0.402 on p150b, 0.342 best (p150a, in-place KV cache).
+    # Cleared in every configuration on both boards; PERF.md section 3.2 has the figures.
     "rtf": Meets(),
     # Reaching 0.2 needs the LLM decode step under 1.5 ms on its own; the step is
-    # 4.98 ms at its best measured and is bandwidth-bound on the AR decoder's weights.
-    # Band is centred between the two boards' default configurations.
+    # around 5 ms at its best measured and is bandwidth-bound on the AR decoder's
+    # weights. Band is centred between the two boards' default configurations.
     "rtf_stretch": Misses(
         0.385, 0.35, "no op-level lever left; needs a smaller decoder or multi-chip tensor parallelism"
     ),
-    # Interleaved streaming, 3 runs on p150a: 2.125, 2.133 and 2.125 s of wall time for
-    # 3.27 s of audio -- a ratio of 0.649 with 35 % of headroom, cleared every run. The
-    # spread across the three is 8 ms, the tightest measurement in this file.
+    # Interleaved streaming clears this on both boards every run, with 22 % of headroom
+    # on the slower one and 35 % on the faster -- the widest margin of any gate here,
+    # and the reason this is a `Meets` while the same gate straddles on Wormhole.
+    # Repeated runs on p150a agreed to within 8 ms, the tightest measurement in this
+    # file, so the verdict is not resting on one sample.
     #
     # Blackhole ships the plain decoder here, because `kv_inplace_default` is false on
-    # this architecture; forcing the in-place one gives 2.017 s (0.617) but that is not
-    # what runs, so it is not what is recorded.
+    # this architecture. Forcing the in-place one is faster still, but that is not what
+    # runs, so it is not what is recorded.
     "stream_realtime": Meets(),
 }
 
@@ -177,24 +181,28 @@ BLACKHOLE = {
 # band below rather than silently inherit n300's verdict, which is the intended
 # behaviour -- see the module docstring.
 WORMHOLE = {
-    # End-to-end traced decode: 127.3 tok/s default, 130.6 with COSYVOICE_FF2_GRID,
-    # 128.0 with the in-place KV cache made explicit. That last row measures the same
-    # thing as the default -- `kv_inplace_default` reads the architecture and turns the
-    # in-place cache on for Wormhole -- and lands within noise of it, as it should.
+    # End-to-end traced decode clears both gates in every configuration, by a factor of
+    # two against the stretch target. The three configurations land within a few per
+    # cent of each other, as they should: `kv_inplace_default` reads the architecture
+    # and turns the in-place cache on for Wormhole, so the explicit in-place row
+    # measures the same thing as the default. PERF.md section 3.3 has the figures.
     "tok_s": Meets(),
     "tok_s_stretch": Meets(),
-    # 0.553 / 0.552 / 0.564 across the certification run's three configurations
-    # (PERF.md Part I ~S3.2). The full-suite run twenty minutes earlier, at a tree
-    # differing only in this file, measured 0.539 / 0.554 / 0.542 -- so **the same board
-    # moves ~2.6 % between runs**, which is the flow decoder's documented run-to-run
-    # variation and is precisely why the band is +/-20 % rather than tight. The centre
-    # sits between the two runs rather than on either.
+    # Three full-suite runs of the same three configurations on the same board, at
+    # trees differing only in this directory, measured 0.539 / 0.554 / 0.542, then
+    # 0.553 / 0.552 / 0.564, then 0.550 / 0.562 / 0.566 -- so **the same board spans
+    # about 5 % across runs of identical work**, which is the flow decoder's documented
+    # run-to-run variation and is precisely why the band is +/-20 % rather than tight.
+    # The centre sits between the runs rather than on any one of them, and PERF.md
+    # section 3.2 publishes the latest.
     #
-    # **`COSYVOICE_FF2_GRID=8x2` does not help on this part.** It lands within noise of
-    # the default (0.552 against 0.553), where an earlier vintage had it winning clearly
-    # (0.577 -> 0.550). The flag stays opt-in and Blackhole-favoured for exactly this
-    # reason: its best shape is not portable, and on n300 its benefit is not even
-    # reliably positive.
+    # **`COSYVOICE_FF2_GRID=8x2` does not help on this part**, and across those three
+    # runs it has come in below the default, level with it, and above it -- which is
+    # what "within noise" means when you have enough samples to say it. An earlier
+    # vintage had it winning clearly. The flag stays opt-in and Blackhole-favoured for
+    # exactly this reason: its best shape is not portable, and on n300 its end-to-end
+    # benefit is not reliably positive, even though it is worth a real 1.04x on the
+    # decode step it actually touches.
     "rtf": Misses(
         0.55,
         0.20,

@@ -24,8 +24,8 @@ is the thing this structure exists to prevent.
 
 | | |
 |---|---|
-| Commit | ``c84b4f151b6`` |
-| Date | 2026-08-30 |
+| Commit | ``12c1f718798`` |
+| Date | 2026-09-03 |
 | tt-metal | `571b1e0395` (the C++/ttnn build the model was overlaid onto) |
 | Boards | Blackhole `p150a`, Blackhole `p150b`, Wormhole n300 |
 | Configurations | host; `pcc`+`e2e`; `perf` × {default, `COSYVOICE_FF2_GRID=8x2`, `COSYVOICE_KV_INPLACE=1`} |
@@ -50,7 +50,10 @@ pytest models/demos/cosyvoice/tests/perf/ -v -s                         # and ag
 board runs a few per cent slower on identical work because the active cooler sustains a
 higher clock. That difference is the same order as several of the optimisations in Part
 II, so the two stay separate columns throughout and neither backfills the other's
-empty cells. Accuracy is unaffected — PCC matches to ten digits across both.
+cells. Accuracy is close but not identical between them: of the eight PCC rows in §7,
+four match to ten digits and four agree only to the third or fourth decimal — enough
+that quoting one board's figure for the other would be wrong in the digits that table
+prints, which is why it prints all three.
 
 The n300 result is one Wormhole B0 chip — nothing in this port is multi-chip.
 `docs/VALIDATION.md`'s *device matrix* has the full reasoning.
@@ -60,13 +63,19 @@ The n300 result is one Wormhole B0 chip — nothing in this port is multi-chip.
 | tier | count | needs | result |
 |---|---:|---|---|
 | host | 113 | nothing | 113 passed on all three boards |
-| `pcc` + `e2e` | 150 | `/dev/tenstorrent` | 148 passed 2 skipped / 149 passed 1 skipped |
+| `pcc` + `e2e` | 150 | `/dev/tenstorrent` | 149 passed, 1 skipped, on all three boards |
 | `perf` | 14 | `/dev/tenstorrent` | 14 passed, on each of the three configurations, on all three boards |
 
 The device tier re-runs the host tier (it lives in `tests/pcc/`), which is why 150 is
 not 113 + 37. One test is skipped with its reason attached — end-to-end batched
 synthesis, blocked by a pre-existing device defect; `docs/VALIDATION.md` has the
 account.
+
+**The three boards now run the same tests.** Until 2026-09-03 n300 skipped two more —
+both of the tests that drive the *interleaved* streaming schedule, one in `e2e` and one
+in `perf` — because that schedule hung there. The hang was the tests' own capture
+order rather than the schedule, and §10 item 3 has the account. Removing it is what
+makes this row a single figure instead of two.
 
 ## 2. The requirements, and the verdict on each
 
@@ -83,10 +92,10 @@ stops doing so, the run fails and both are updated together.
 
 | requirement | target | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|---:|
-| Semantic token generation | `>= 30 tok/s` | `201.3 tok/s` ✅ | `192.1 tok/s` ✅ | `130.6 tok/s` ✅ |
-| Semantic token generation (stretch) | `>= 60 tok/s` | `201.3 tok/s` ✅ | `192.1 tok/s` ✅ | `130.6 tok/s` ✅ |
-| Real-time factor | `< 0.5` | `0.342` ✅ | `0.362` ✅ | `0.552` ❌ |
-| Real-time factor (stretch) | `< 0.2` | `0.342` ❌ | `0.362` ❌ | `0.552` ❌ |
+| Semantic token generation | `>= 30 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `130.4 tok/s` ✅ |
+| Semantic token generation (stretch) | `>= 60 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `130.4 tok/s` ✅ |
+| Real-time factor | `< 0.5` | `0.343` ✅ | `0.370` ✅ | `0.550` ❌ |
+| Real-time factor (stretch) | `< 0.2` | `0.343` ❌ | `0.370` ❌ | `0.550` ❌ |
 
 Best of each configuration; §3 breaks them out. `RTF < 0.5` is the only requirement
 whose verdict differs by architecture, and the gap is the compute grid: 64 cores against
@@ -115,10 +124,10 @@ the LLM does not.
 
 | stage | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| LLM (14-block AR decoder, traced, fused attention) | `5.72 ms/token × 164 = 0.938 s` · RTF `0.287` | `5.93 ms/token × 164 = 0.973 s` · RTF `0.297` | `7.85 ms/token × 164 = 1.288 s` · RTF `0.393` |
-| Flow decoder (10 Euler steps, traced, fused SDPA) | `0.256 s` · RTF `0.078` | `0.285 s` · RTF `0.087` | `0.451 s` · RTF `0.138` |
-| HiFT vocoder | `0.047 s` · RTF `0.014` | `0.059 s` · RTF `0.018` | `0.072 s` · RTF `0.022` |
-| **Total** | **`1.241 s` · RTF `0.379`** | **`1.317 s` · RTF `0.402`** | **`1.811 s` · RTF `0.553`** |
+| LLM (14-block AR decoder, traced, fused attention) | `5.72 ms/token × 164 = 0.938 s` · RTF `0.287` | `5.92 ms/token × 164 = 0.972 s` · RTF `0.297` | `7.67 ms/token × 164 = 1.257 s` · RTF `0.384` |
+| Flow decoder (10 Euler steps, traced, fused SDPA) | `0.255 s` · RTF `0.078` | `0.286 s` · RTF `0.087` | `0.473 s` · RTF `0.144` |
+| HiFT vocoder | `0.047 s` · RTF `0.014` | `0.067 s` · RTF `0.021` | `0.072 s` · RTF `0.022` |
+| **Total** | **`1.240 s` · RTF `0.379`** | **`1.325 s` · RTF `0.405`** | **`1.802 s` · RTF `0.550`** |
 
 The LLM is 76 % of an utterance at `p150a`'s default settings, the flow decoder 21 % and
 the vocoder 4 %. That split is why every optimisation in Part II is aimed at the decode
@@ -129,9 +138,9 @@ reach (§3.4).
 
 | configuration | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| default | `0.379` | `0.402` | `0.553` |
-| `COSYVOICE_FF2_GRID=8x2` | `0.354` | `0.378` | `0.552` |
-| `COSYVOICE_KV_INPLACE=1` | `0.342` | `0.362` | `0.564` |
+| default | `0.379` | `0.405` | `0.550` |
+| `COSYVOICE_FF2_GRID=8x2` | `0.355` | `0.377` | `0.562` |
+| `COSYVOICE_KV_INPLACE=1` | `0.343` | `0.370` | `0.566` |
 
 The defaults differ by architecture on purpose: `kv_inplace_default` reads
 `device.arch()` and turns the in-place KV cache on for Wormhole and off for Blackhole,
@@ -139,13 +148,22 @@ because the trade differs by part (Part II §1.4). So the n300 "default" column 
 *is* the in-place cache, and its explicit row measures the same thing twice — which is
 worth keeping, because a drift between them would mean the default stopped being read.
 
+The n300 column reads as though both flags cost something, and the honest reading is
+that neither does much there: `0.550`, `0.562` and `0.566` are three runs of a
+measurement whose flow stage moves about 5 % between them, and `COSYVOICE_KV_INPLACE=1`
+is by construction the same configuration as the default. `COSYVOICE_FF2_GRID` is the
+one real comparison in that column, and it is worth `1.04×` on the decode step alone
+(§4, `11.63 → 11.15 ms` at `B = 1`) while the end-to-end figure it feeds is dominated by a flow stage the flag does
+not touch. On Blackhole, where the LLM is a larger share and the flags are genuine
+changes, both move the number and in the same direction each time.
+
 ### 3.3 Semantic-token throughput
 
 | configuration | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| default | `174.8 tok/s` | `168.5 tok/s` | `127.3 tok/s` |
-| `COSYVOICE_FF2_GRID=8x2` | `190.7 tok/s` | `184.0 tok/s` | `130.6 tok/s` |
-| `COSYVOICE_KV_INPLACE=1` | `201.3 tok/s` | `192.1 tok/s` | `128.0 tok/s` |
+| default | `174.8 tok/s` | `168.8 tok/s` | `130.4 tok/s` |
+| `COSYVOICE_FF2_GRID=8x2` | `190.6 tok/s` | `183.4 tok/s` | `126.5 tok/s` |
+| `COSYVOICE_KV_INPLACE=1` | `201.2 tok/s` | `190.5 tok/s` | `126.4 tok/s` |
 
 Against a `>= 30 tok/s` requirement and a `>= 60 tok/s` stretch target. The *untraced*
 control, measured in the same process, is in §6.
@@ -153,7 +171,7 @@ control, measured in the same process, is in §6.
 ### 3.4 Why `RTF < 0.2` is not reachable here
 
 Not a tuning shortfall, and the arithmetic says so. `0.2` on this utterance is a budget
-of `0.654 s` total. The flow decoder alone spends about `0.256 s` of it after a
+of `0.654 s` total. The flow decoder alone spends about `0.255 s` of it after a
 fused SDPA and a cross-utterance trace cache, and its cost is 64 transformer blocks × 10
 Euler steps — the Euler count is a model parameter, and halving it buys `1.43×` at a
 PCC below every threshold here (Part II §2.2). The LLM's share would need the decode
@@ -174,17 +192,32 @@ Per-utterance decode cost, `max_len = 384`, mean of 32 steps, at each board's de
 
 | batch | `p150a` | `p150b` | n300 |
 |---:|---:|---:|---:|
-| **1** | `5.70 ms` (1.00×) | `6.02 ms` (1.00×) | `11.47 ms` (1.00×) |
-| **2** | `4.58 ms` (1.24×) | `4.82 ms` (1.25×) | `8.64 ms` (1.33×) |
-| **4** | `4.11 ms` (1.39×) | `4.32 ms` (1.39×) | `7.47 ms` (1.53×) |
-| **8** | `3.77 ms` (1.51×) | `3.97 ms` (1.52×) | `6.96 ms` (1.65×) |
+| **1** | `5.71 ms` (1.00×) | `6.15 ms` (1.00×) | `11.63 ms` (1.00×) |
+| **2** | `4.59 ms` (1.24×) | `4.70 ms` (1.31×) | `8.78 ms` (1.32×) |
+| **4** | `4.11 ms` (1.39×) | `4.34 ms` (1.42×) | `7.54 ms` (1.54×) |
+| **8** | `3.79 ms` (1.51×) | `4.00 ms` (1.54×) | `6.86 ms` (1.69×) |
 
-At `B = 8` the per-utterance decode cost falls to about `3.77 ms` on `p150a`, `3.97 ms`
-on `p150b` and `6.96 ms` on n300 — a `1.51×`–`1.65×` improvement on the *same* kernels,
+At `B = 8` the per-utterance decode cost falls to about `3.79 ms` on `p150a`, `4.00 ms`
+on `p150b` and `6.86 ms` on n300 — a `1.51×`–`1.69×` improvement on the *same* kernels,
 with nothing changed but how many rows one weight read serves. The ratio is nearly
-identical across the two architectures, which is what a bandwidth-limited step predicts.
+identical across the two architectures, which is what a bandwidth-limited step predicts;
+n300 gains slightly more because its step starts further from the bandwidth floor.
 
-It compounds with `COSYVOICE_FF2_GRID`, which is not obvious in advance — the two attack the same matmul. With the flag on, `p150a` reaches `3.17 ms` per utterance at `B = 8` (`1.66×` against that configuration's own `B = 1`), and `p150b` reaches `3.39 ms` (`1.63×`). Batching amortises the weight *read*; the grid flag fixes how the reduction is split. They are different bottlenecks and they add.
+It compounds with `COSYVOICE_FF2_GRID`, which is not obvious in advance — the two attack
+the same matmul. With the flag on, per-utterance cost at `B = 8` reaches `3.21 ms` on
+`p150a`, `3.31 ms` on `p150b` and `5.94 ms` on n300, each against that configuration's
+own `B = 1`:
+
+| | `p150a` | `p150b` | n300 |
+|---|---:|---:|---:|
+| `B = 1`, `COSYVOICE_FF2_GRID=8x2` | `5.24 ms` | `5.69 ms` | `11.15 ms` |
+| `B = 8`, `COSYVOICE_FF2_GRID=8x2` | `3.21 ms` (1.63×) | `3.31 ms` (1.72×) | `5.94 ms` (1.88×) |
+
+Batching amortises the weight *read*; the grid flag fixes how the reduction is split.
+They are different bottlenecks and they add — and they add on all three boards, which
+is the part that was not obvious. n300 compounds them furthest, to `1.88×`, even though
+the flag is worth almost nothing to it end to end (§3.2): the decode step is where the
+flag acts, and end-to-end that step is diluted by a flow stage it does not touch.
 
 Correctness first, and at ragged prefixes. `test_device_batched_decode_matches_single`
 steps four sequences with prompt lengths `209, 177, 241, 193` together and against each
@@ -215,17 +248,23 @@ captured prefix and stepped for every token.
 
 | | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| LLM alone, all 164 steps | `0.956 s` | `1.025 s` | — |
-| batch schedule, first audio = total | `1.569 s` | `1.744 s` | `2.485 s` |
-| streaming, first audio | `1.313 s` | `1.493 s` | `2.087 s` |
-| streaming, total | `2.139 s` | `2.464 s` | `3.432 s` |
-| first-audio gain | **`1.19×`** | **`1.17×`** | **`1.19×`** |
-| cost of interleaving, on the total | `1.36×` | `1.41×` | `1.38×` |
-| streamed total ÷ audio produced | `0.654` | `0.754` | `1.050` |
+| LLM alone, all 164 steps | `0.949 s` | `1.020 s` | `1.401 s` |
+| batch schedule, first audio = total | `1.560 s` | `1.770 s` | `2.391 s` |
+| streaming, first audio | `1.306 s` | `1.539 s` | `2.133 s` |
+| streaming, total | `2.127 s` | `2.536 s` | `3.512 s` |
+| first-audio gain | **`1.19×`** | **`1.15×`** | **`1.12×`** |
+| cost of interleaving, on the total | `1.36×` | `1.43×` | `1.47×` |
+| streamed total ÷ audio produced | `0.650` | `0.776` | `1.074` |
 
 Each column is one run. The n300 figures move by a few per cent between runs, and the
 last row is the one that crosses a threshold, so its distribution is given below rather
 than inferred from this column.
+
+The first row is the control the other rows are read against: the same 164 decode steps
+with neither schedule's flow or vocoder work attached. Subtracting it says what
+interleaving actually costs — `1.18 s` of flow and vocoder on `p150a` against `2.11 s`
+on n300, on identical work — which is the same 8×8-against-13×10 grid gap that the last
+row turns on.
 
 **The n300 column is new.** This test ran on Blackhole only until 2026-09-03, because it
 wedged n300 — and the reason turned out to be that it captured its decode trace before
@@ -271,17 +310,17 @@ rather than historical.
 
 | | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| AR decode step, untraced (fixed-width cache) | `19.29 ms` | `23.60 ms` | `19.97 ms` |
-| AR decode step, traced | `5.72 ms` | `6.03 ms` | `11.70 ms` |
-| trace speedup | **`3.37×`** | **`3.92×`** | **`1.71×`** |
-| moving KV cache, traced | `5.71 ms` | `6.20 ms` | `10.80 ms` |
-| in-place KV cache, traced | `4.96 ms` | `5.39 ms` | `8.31 ms` |
-| `bfloat16` weights, traced step | `5.48 ms` | `5.83 ms` | `8.35 ms` |
-| `bfloat8_b` weights, traced step | `5.48 ms` | `5.62 ms` | `7.75 ms` |
+| AR decode step, untraced (fixed-width cache) | `19.20 ms` | `23.26 ms` | `20.39 ms` |
+| AR decode step, traced | `5.76 ms` | `6.08 ms` | `11.23 ms` |
+| trace speedup | **`3.33×`** | **`3.83×`** | **`1.82×`** |
+| moving KV cache, traced | `5.83 ms` | `6.13 ms` | `9.96 ms` |
+| in-place KV cache, traced | `5.02 ms` | `5.30 ms` | `7.61 ms` |
+| `bfloat16` weights, traced step | `5.47 ms` | `5.74 ms` | `8.28 ms` |
+| `bfloat8_b` weights, traced step | `5.50 ms` | `5.78 ms` | `7.79 ms` |
 
 Trace capture is the single largest lever in the port and it is bit-exact — `test_device_traced_matches_untraced` checks that at PCC `1.0` before any of these timings are believed. The in-place KV cache is the second, and it is *not* bit-exact (worst PCC `0.9987` over 72 steps, non-accumulating), which is why it ships as an architecture-dependent default rather than as the only mechanism.
 
-`bfloat8_b` weights are a memory option, not a speed one. Halving the weight width moves the traced step by about a per cent in either direction across the three boards — inside run-to-run noise. The decode step is not weight-*bandwidth* limited in the way that would predict; Part II §1.3 has what limits it instead. `COSYVOICE_WEIGHT_BF8` stays available for the 352 → 176 MB it saves.
+`bfloat8_b` weights are a memory option on Blackhole and a small speed one on Wormhole, and the split is the interesting part. Halving the weight width leaves the traced step `0.99×` on both Blackhole boards — a per cent the wrong way, inside run-to-run noise — and gives `1.06×` on n300. That is what a step which is not weight-*bandwidth* limited looks like on the wider part and marginally is on the narrower one; Part II §1.3 has what limits it instead. Accuracy holds either way, at hidden-state PCC `0.9995`–`0.9997` against `bfloat16` across the three boards. `COSYVOICE_WEIGHT_BF8` stays off by default and available for the 352 → 176 MB it saves, plus that 6 % where it happens to pay.
 
 ### The growing KV cache, and why the fixed-width one exists
 
@@ -291,9 +330,9 @@ compile. Measured in this run, on the growing cache:
 
 | | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| cold pass, mean of 32 — what a real utterance gets | `41.51 ms` | `65.68 ms` | `61.46 ms` |
-| warm pass, second time over the same sizes | `19.47 ms` | `23.20 ms` | `20.55 ms` |
-| compile share of the cold pass | `53.1 %` | `64.7 %` | `66.6 %` |
+| cold pass, mean of 32 — what a real utterance gets | `42.19 ms` | `69.21 ms` | `58.52 ms` |
+| warm pass, second time over the same sizes | `19.33 ms` | `22.85 ms` | `19.87 ms` |
+| compile share of the cold pass | `54.2 %` | `67.0 %` | `66.0 %` |
 
 The cold figure depends on what the machine's JIT cache already holds, so it is the one
 number here that is not portable — it is reported because the *ratio* is the point, not
@@ -302,24 +341,39 @@ for a whole utterance, which is what makes generation practical at all.
 
 ## 7. Accuracy
 
-| module | PCC |
-|---|---:|
-| tokens → waveform (reference excitation) | `0.9951367159` |
-| flow: tokens → mel | `0.9993962895` |
-| whole HiFT vocoder | `0.9996373743` |
-| LLM AR prefill, 209 tokens | `0.9997530373` |
-| LLM AR decode step | `0.9989617190` |
-| traced vs untraced decode | `1.0000000000` (bit-exact) |
-| iSTFT vs captured golden | `0.9999298811` |
-| batched vs single-row decode | `0.9999998808` (p150a) / `0.9999998808` (p150b) / `0.9985343218` (n300) |
+PCC is a per-board measurement, not a property of the port, so every row carries all
+three. An earlier revision of this table gave one unattributed column; two of its
+figures matched no board in the run it cited, which is what a single column invites.
 
-| check | value | target |
-|---|---:|---:|
-| Token agreement, teacher-forced | `99.04 %` | `> 95 %` ✅ |
-| Token agreement, through the KV cache | `100.00 %` | `> 95 %` ✅ |
-| Streaming vs batch generation, greedy | `100.00 %` | — |
-| WER (English) | `0.00 %` | `< 3.0` ✅ |
-| Speaker similarity (mean, 10 utterances) | `83–96` | `> 60` ✅ |
+| module | `p150a` | `p150b` | n300 |
+|---|---:|---:|---:|
+| tokens → waveform (reference excitation) | `0.9965027711` | `0.9960437125` | `0.9947304108` |
+| flow: tokens → mel | `0.9994578949` | `0.9993992586` | `0.9994118177` |
+| whole HiFT vocoder | `0.9996373743` | `0.9996373743` | `0.9996358182` |
+| LLM AR prefill, 209 tokens | `0.9997530373` | `0.9997423663` | `0.9995400821` |
+| LLM AR decode step | `0.9989617190` | `0.9995185735` | `0.9987986883` |
+| traced vs untraced decode | `1.0000000000` | `1.0000000000` | `1.0000000000` |
+| iSTFT vs captured golden | `0.9999298811` | `0.9999298811` | `0.9999298811` |
+| batched vs single-row decode | `0.9999998808` | `0.9999998808` | `0.9985343218` |
+
+Two rows are worth reading rather than scanning. `traced vs untraced` is bit-exact on
+every board, which is what licenses every timing in §6. And `batched vs single-row` is
+four orders of magnitude looser on n300 than on Blackhole — `0.9985` against
+`0.99999988` — which is a real architectural difference in the batched matmul's
+accumulation, not noise; it is why the test carries a per-architecture floor rather
+than one number.
+
+| check | `p150a` | `p150b` | n300 | target |
+|---|---:|---:|---:|---:|
+| Token agreement, teacher-forced | `99.04 %` | `99.52 %` | `99.04 %` | `> 95 %` ✅ |
+| Token agreement, through the KV cache | `100.00 %` | `100.00 %` | `100.00 %` | `> 95 %` ✅ |
+| Streaming vs batch generation, greedy | `100.00 %` | `100.00 %` | `100.00 %` | — |
+| WER (English) | `0.00 %` | — | — | `< 3.0` ✅ |
+| Speaker similarity (mean, 10 utterances) | `83–96` | — | — | `> 60` ✅ |
+
+The last two rows are single-board by necessity rather than by omission — they need the
+reference venv's whisper and `WavLMForXVector`, and that scoring runs where the host has
+the memory for it. Everything above them is measured on each board it is quoted for.
 
 WER and speaker similarity are produced by `scripts/eval_wer_sim.py` in the reference
 venv — whisper `large-v3` and `WavLMForXVector`, neither of which tt-metal's
@@ -330,7 +384,8 @@ The waveform-PCC check injects the reference excitation deliberately. f0 error
 integrates into phase drift, and holding drift under a tenth of a cycle across 72 192
 samples needs mean f0 error below `0.03 Hz` — tighter than Tensix HiFi4 delivers. That
 is a model property, not a defect; with a self-computed excitation the metrics that
-still hold are the energy envelope (`0.9975`) and RMS (within 6 %).
+still hold are the energy envelope — `0.9965` (p150a) / `0.9943` (p150b) / `0.9978`
+(n300) — and RMS, which lands `5.8 %`–`6.4 %` above the reference on all three.
 
 ## 8. Generation modes and speech quality
 
@@ -407,7 +462,10 @@ cause is now established and whose remedy is known but does not yet ship cleanly
    Two, separately, and now closed: `test_device_streaming_first_audio_latency` used to
    hang Wormhole. It captured its decode trace before `prefill()` had run, so the
    prefill compiled under a live trace. It warms the prefill first as of 2026-09-03,
-   runs on all three boards, and the perf tier has no skips. What it revealed is in §5:
+   runs on all three boards, and the perf tier has no skips. The e2e tier's
+   `test_device_streaming_generates_the_same_tokens_as_batch` had been skipped on n300
+   with the same reason and also runs there now, so both tiers match across the three
+   boards (§1). What the perf skip revealed is in §5:
    n300 does not reliably sustain real time on the interleaved schedule.
    `docs/VALIDATION.md` has the full account, including the design constraint that
    remains — every path the traced code touches, the flow decoder and vocoder and the
@@ -441,10 +499,10 @@ construction. What is left here is the comparisons that would need a second tree
 | change | effect |
 |---|---|
 | fixed-width KV cache | **73×** on the first pass — a growing cache gives every token a new shape and so a fresh JIT compile; 98.9 % of the cold cost was compilation. Part I §6. |
-| trace capture, both compute stages | `3.37×` (`p150a`) / `3.92×` (`p150b`) / `1.71×` (n300) on the decode step. Part I §6. |
+| trace capture, both compute stages | `3.33×` (`p150a`) / `3.83×` (`p150b`) / `1.82×` (n300) on the decode step. Part I §6. |
 | fused decode attention (`sdpa_decode` with the rel-pos term as its mask) | `−17.1 %` on the step; `3.3×`–`3.4×` on the attention block alone. §1.1. |
 | hoisting `linear_pos` out of the decode step | `15.71 → 8.25 ms`. §1.2. |
-| in-place KV via `ttnn.update_cache` | `1.30×` on n300, `1.15×` on Blackhole — the one change that pays more on the slower part. Part I §6. |
+| in-place KV via `ttnn.update_cache` | `1.31×` on n300, `1.16×` on Blackhole — the one change that pays more on the slower part. Part I §6. |
 | cached CFM trace | `2.37×` on the solver on `p150b`, `1.67×` on n300. §2.2. |
 | fused SDPA in the flow estimator | faster and more accurate on every check — `0.707 → 0.600 s`. §2.1. |
 | `rel_shift` → one slice at `T = 1` | seven ops become one. §1.2. |
@@ -452,24 +510,40 @@ construction. What is left here is the comparisons that would need a second tree
 
 ### The RTF journey, in order applied
 
-Each row adds one change to the row above it — the order the work actually happened
-in, not the ranking above:
+Each row adds one change to the row above it — the order the work actually happened in,
+not the ranking above. **Every row is a flag combination that still exists**, so unlike
+the rest of Part II this table does not need a second tree: it was re-measured on all
+three boards on 2026-09-03, one process per row, cumulative left to right.
 
-| | `p150a` | `p150b` | n300 |
-|---|---:|---:|---:|
-| explicit chain, no CFM cache | `0.533` | `0.584` | `0.950` |
-| + fused decode attention | `0.477` ✅ | `0.523` | `0.891` |
-| + cached CFM trace | *`0.367` projected* | `0.436` ✅ | — |
-| + in-place KV (`COSYVOICE_KV_INPLACE=1`) | `0.449` ✅ | `0.398` ✅ | `0.628` |
-| + permute-free GroupNorm (and, on n300, the conv fix) | — | `0.365` ✅ | `0.575` |
+| | flags added | `p150a` | `p150b` | n300 |
+|---|---|---:|---:|---:|
+| explicit chain, no CFM cache | `SDPA_DECODE=0`, `CFM_TRACE_CACHE=0`, `KV_INPLACE=0`, `GN_PERMUTE=1` | `0.533` | `0.579` | `0.931` |
+| + fused decode attention | `SDPA_DECODE=1` | `0.476` ✅ | `0.524` | `0.864` |
+| + cached CFM trace | `CFM_TRACE_CACHE=1` | `0.415` ✅ | `0.437` ✅ | `0.779` |
+| + in-place KV | `KV_INPLACE=1` | `0.381` ✅ | `0.400` ✅ | `0.627` |
+| + permute-free GroupNorm | `GN_PERMUTE` unset | `0.344` ✅ | `0.369` ✅ | `0.575` |
 
-The last row is a median over four runs on `p150b` and six on n300, not a single
-result — the flow stage varies ~5 % run to run on n300, and the first figure this row
-was written with was the best of the set rather than the middle of it. Rows above it
-are single runs, fine while changes were worth 10–20 % and not fine at this scale.
-`p150a` became unreachable partway through; its gaps are left empty rather than filled
-from the other board. `COSYVOICE_KV_INPLACE` becoming the architecture-aware default
-moved the last row's numbers again — §3.2 has the current ones.
+Every prefix is `COSYVOICE_`. The last row is each board's shipped configuration with
+the in-place cache forced on, so it should agree with §3.2's `COSYVOICE_KV_INPLACE=1`
+row, and it does: `0.344`/`0.343`, `0.369`/`0.370`, `0.575`/`0.566`.
+
+**Re-measuring corrected two figures and filled three holes.** The earlier version of
+this table had `p150a` unreachable partway through and carried a *projected* `0.367`
+for the CFM-cache row; measured, that row is `0.415`, so the projection was optimistic
+by 12 %. It also had `p150a`'s in-place-KV row at `0.449` — *above* the row it was
+supposed to improve on — which is what a single run of a measurement with a ~5 %
+flow-stage spread can look like when it lands badly. Measured now, every row improves
+on the one above it on every board, which is the shape the sequence should have had all
+along. What has not changed is the ranking: the two largest steps are still the CFM
+trace cache and the in-place KV cache, in that order, on all three boards.
+
+One honesty note on provenance. These are the flag differences measured against
+*today's* tree, not a reconstruction of the trees each change originally landed on, so
+the rows carry other work that arrived since. That mostly does not show — rows 1, 2, 4
+and 5 land within a couple of per cent of the original figures on the boards that had
+them — but on n300 the first two rows are now `0.931` and `0.864` against `0.950` and
+`0.891`, and the Wormhole `conv1d` workaround is in every row here rather than only the
+last, which is the difference the original table's parenthesis was flagging.
 
 ## 1. The AR decode step
 

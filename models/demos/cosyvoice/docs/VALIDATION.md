@@ -118,7 +118,7 @@ shipped (see below).
 | Minimize token generation latency | ✅ | `test_device_traced_throughput`, `test_device_inplace_throughput` | *The LLM decode step* |
 | **Batch processing for multiple utterances** | ✅ decode batched and checked; end-to-end batched synthesis blocked by a pre-existing device defect (below) | `test_device_batched_decode_matches_single` (correctness, ragged prefixes), `test_device_batched_decode_throughput` (the sweep, checked) | *Batched decode* |
 | Efficient sampling strategies | ✅ top-k / top-p / RAS, host-side **by measurement** | `test_nucleus_filter_*`, `test_ras_*`, `scripts/profile_token_tail.py` | *The LLM decode step* |
-| **Pipeline semantic generation with acoustic modeling** | ✅ | `test_device_streaming_first_audio_latency` (both schedules, all three stages real; Blackhole), `test_device_streaming_generates_the_same_tokens_as_batch` (the shipped API, all three boards) | *Streaming* |
+| **Pipeline semantic generation with acoustic modeling** | ✅ | `test_device_streaming_first_audio_latency` (both schedules, all three stages real), `test_device_streaming_generates_the_same_tokens_as_batch` (the shipped API) — both on all three boards as of 2026-09-03 | *Streaming* |
 | Optimize flow decoder computation | ✅ | `test_device_solve_euler_matches_golden`; trace-cache timing | *The flow decoder* |
 | Minimize memory and TM overheads | ✅ `permute` removed from the decode step | `scripts/count_decode_ops.py` | *Removing token-independent recomputation* |
 | Speculative decoding | ❌ **not explored** — see below | — | — |
@@ -219,12 +219,11 @@ live and clobbered by a later `execute_trace`. TTNN warns about exactly this: *"
 buffers may be corrupted once a trace is executed."*
 
 The remedy is known and is not in the tree. Parking those four on the host between
-chunks (`to_torch` out, `from_torch` back) fixes the audio — verified on `p150a` and
-n300. It is not shipped because it hangs `tests/perf/test_streaming_perf.py` on
-Blackhole, where that test otherwise passes in 12.7 s; the A/B is one commit apart on
-one board. Also tried and
-rejected: draining the queue before the readback, and hoisting the synthesizer out of
-the traced region.
+chunks (`to_torch` out, `from_torch` back) fixes the audio — verified on one board of
+each architecture, Blackhole and Wormhole. It is not shipped because it hangs
+`tests/perf/test_streaming_perf.py` on Blackhole, where that test otherwise passes in
+12.7 s; the A/B is one commit apart on one board. Also tried and rejected: draining the
+queue before the readback, and hoisting the synthesizer out of the traced region.
 
 So the defect stands, with `synthesize` as the checked path for audio, and the
 schedule itself checked by
@@ -238,6 +237,16 @@ not yet deliverable is correct audio out of the interleaved path.
 n300 for months and was skipped there. It is not skipped any more: the perf tier runs
 14 of 14 on all three boards.
 
+**Two tests skipped on n300 for this, and both now run.** The other was
+`tests/e2e/test_pipeline_api.py::test_device_streaming_generates_the_same_tokens_as_batch`,
+skipped with the same reason — *"the interleaved schedule hangs Wormhole n300"* — which
+made the e2e tier 148 passed and 2 skipped on n300 against 149 and 1 on Blackhole. Its
+skip came off first and its pass was never re-recorded; the run of 2026-09-03 has it
+passing in 33 s and puts all three boards on 149 passed, 1 skipped, with the one
+remaining skip the L1_SMALL defect above. Neither of these was a property of the
+interleaved schedule, which is the point: one fault, two skips, and a whole architecture
+column that read worse than it was.
+
 **The cause was the test's own capture order.** It captured its decode trace before
 `prefill()` had ever run, so the prefill compiled its kernels under a live trace, and
 the board froze in the next thing to allocate — the vocoder's conv weight preparation,
@@ -245,10 +254,15 @@ right after Metal's warning that *"Allocating device buffers is unsafe due to th
 existence of an active trace"*. One prefill before capture fixes it, on both
 architectures:
 
-| sequence, one variable apart | Wormhole n300 | Blackhole p150a |
+| sequence, one variable apart | Wormhole | Blackhole |
 |---|---|---|
 | capture, then first prefill | hangs | hangs at `close_device` |
 | one prefill, then capture | clean, teardown included | clean, teardown included |
+
+The columns are architectures, not boards: the A/B was run on one board of each, and
+what it separates is Wormhole's failure mode from Blackhole's, not one card from
+another. The fix it produced is what the perf tier then checks on all three boards,
+every run.
 
 `test_pipeline_perf` never hit this because it has always prefilled before capturing.
 The rule this leaves is general: **every path the traced code will touch — the flow
