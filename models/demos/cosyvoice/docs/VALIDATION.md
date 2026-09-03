@@ -232,44 +232,50 @@ schedule itself checked by
 tokens and that chunks are emitted *during* generation, both of which hold. What is
 not yet deliverable is correct audio out of the interleaved path.
 
-### `test_streaming_perf` hangs on Wormhole — open
+### `test_streaming_perf` on Wormhole — was a hang, now a measured limit
 
-`tests/perf/test_streaming_perf.py::test_device_streaming_first_audio_latency` wedges
-n300: log frozen, JIT cache flat, CPU pegged, board needing a reset. Both Blackhole
-boards run it. It is skipped on Wormhole with that reason attached rather than left to
-hang, because a wedged board costs every later test in the run.
+`tests/perf/test_streaming_perf.py::test_device_streaming_first_audio_latency` wedged
+n300 for months and was skipped there. It is not skipped any more: the perf tier runs
+14 of 14 on all three boards.
 
-The cause is not established, and one candidate has been eliminated.
-
-An earlier revision of this document named an upstream TTNN defect: re-seeding a
-trace's persistent buffers after that trace had executed. That is withdrawn. The probe
-it rested on captured its trace before the first `prefill()` had ever run, so the
-prefill compiled its kernels under a live trace — a property of the probe, not of the
-path it was standing in for. Adding a warm-up before capture removes the hang on both
+**The cause was the test's own capture order.** It captured its decode trace before
+`prefill()` had ever run, so the prefill compiled its kernels under a live trace, and
+the board froze in the next thing to allocate — the vocoder's conv weight preparation,
+right after Metal's warning that *"Allocating device buffers is unsafe due to the
+existence of an active trace"*. One prefill before capture fixes it, on both
 architectures:
 
 | sequence, one variable apart | Wormhole n300 | Blackhole p150a |
 |---|---|---|
-| capture, then first prefill | hangs at the second seed | hangs at `close_device` |
+| capture, then first prefill | hangs | hangs at `close_device` |
 | one prefill, then capture | clean, teardown included | clean, teardown included |
 
-Four passes of seed plus 164 traced steps, warmed, complete in 14.7 s on n300 and
-8.7 s on p150a. So the decode-only sequence is ruled out, along with the re-seed and
-the trace's lifetime on their own.
+`test_pipeline_perf` never hit this because it has always prefilled before capturing.
+The rule this leaves is general: **every path the traced code will touch — the flow
+decoder, the vocoder, and the prefill alike — must run once before `capture()`.** The
+first two were already warmed here; the prefill was the one that was missed, which is
+why the design constraint recorded in `PERF.md` looked satisfied when it was not.
 
-What remains is the work this test runs *under* the live trace and
-`synthesize_streaming` does not: the flow decoder and the vocoder, repeatedly, across
-four passes. That is where to look next, and it is a narrowing rather than a diagnosis.
+**Two workarounds disappeared with it.** The test had asked for a 64 MB trace region
+instead of the suite's 384 MB, and used the single-trace decoder instead of the
+in-place one, both to avoid the same hang and both documented as deliberate. With the
+warm-up in place it uses the suite's region and the decoder `kv_inplace_default`
+selects, and the n300 schedule is 9–15 % faster for it. When a fault is finally found,
+the workarounds that grew around it are worth re-testing.
 
-Ruled out along the way: the trace region size (384 MB → 64 MB changed nothing — it
-captures one trace, not the in-place path's 65); and the `StreamState` fix above.
+**What the skip was hiding is a real limitation, now enforced.** n300 does not reliably
+sustain real time on the interleaved schedule: over 13 runs the streamed total came in
+between 0.961 and 1.087 times the audio produced, mean 1.040, clearing 1.0 twice.
+Blackhole clears it every run with 35 % of headroom. Because the threshold sits inside
+n300's spread, this is enforced as a straddling band — see `Straddles` in
+`tests/perf/gates.py`, which asserts the band and records the observed pass rate rather
+than asserting a direction that would flake either way. `PERF.md` §5 has the figures.
 
-Two different warm-ups are in play here and they are worth keeping apart. The one this
-test already performs warms the flow decoder and the vocoder before the AR trace is
-captured; reversing that order hangs Blackhole outright, so it is a design constraint
-rather than a lead. The one that mattered for the probe above warms the AR decoder's
-own prefill. This test does not do that second one — its prefill still compiles under
-a live trace, after capture — which makes it the cheapest thing to try next.
+Ruled out along the way, and no longer relevant: the trace region size on its own, and
+the `StreamState` fix above.
+
+Still open, and unchanged by this: the amplitude defect below, and the corruption in
+§*The interleaved schedule's corrupt audio*. Neither is a hang.
 
 ### An n300/Blackhole amplitude difference on a synthetic case — open
 

@@ -216,25 +216,37 @@ captured prefix and stepped for every token.
 | | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
 | LLM alone, all 164 steps | `0.956 s` | `1.025 s` | — |
-| batch schedule, first audio = total | `1.569 s` | `1.744 s` | — |
-| streaming, first audio | `1.313 s` | `1.493 s` | — |
-| streaming, total | `2.139 s` | `2.464 s` | — |
-| first-audio gain | **`1.19×`** | **`1.17×`** | — |
-| cost of interleaving, on the total | `1.36×` | `1.41×` | — |
+| batch schedule, first audio = total | `1.569 s` | `1.744 s` | `2.485 s` |
+| streaming, first audio | `1.313 s` | `1.493 s` | `2.087 s` |
+| streaming, total | `2.139 s` | `2.464 s` | `3.432 s` |
+| first-audio gain | **`1.19×`** | **`1.17×`** | **`1.19×`** |
+| cost of interleaving, on the total | `1.36×` | `1.41×` | `1.38×` |
+| streamed total ÷ audio produced | `0.654` | `0.754` | `1.050` |
 
-The n300 column is empty because *this test* still hangs Wormhole — not because
-the interleaved schedule does. The distinction matters and is recent: the shipped path,
-`CosyVoiceTTNN.synthesize_streaming`, does run on n300, and
-`test_device_streaming_generates_the_same_tokens_as_batch` exercises it there and
-passes. What has no Wormhole timing is this head-to-head measurement.
+Each column is one run. The n300 figures move by a few per cent between runs, and the
+last row is the one that crosses a threshold, so its distribution is given below rather
+than inferred from this column.
 
-The test wedges the board — log frozen, JIT cache flat, needing a reset — where both
-Blackhole boards run the identical code over identical geometries. Ruled out: the trace
-region size, the warm-before-capture ordering, and the `StreamState` fix that cured the
-corruption described in §10. The untested lead is that this test holds one decode trace
-live across four passes while `synthesize_streaming` captures and releases per call.
-It skips on Wormhole with that reason rather than hanging the rest of the run; §10 and
-`docs/VALIDATION.md` carry the detail.
+**The n300 column is new.** This test ran on Blackhole only until 2026-09-03, because it
+wedged n300 — and the reason turned out to be that it captured its decode trace before
+`prefill()` had ever run, so the prefill compiled its kernels under a live trace and the
+board froze in the next thing to allocate, the vocoder's conv weight preparation. One
+prefill before capture fixes it. The certified RTF test never hit this because it has
+always prefilled before capturing.
+
+Removing that fault also removed two workarounds built on top of it. The test had asked
+for a 64 MB trace region rather than the suite's 384 MB, and used the single-trace
+decoder rather than the in-place one, both to avoid the same hang; with the warm-up in
+place it uses the suite's region and the decoder `kv_inplace_default` selects, and the
+n300 schedule runs 9–15 % faster than it did without them.
+
+What the skip was hiding is the last row. **n300 does not reliably sustain real time on
+the interleaved schedule**: across 13 runs the streamed total came in between 0.961 and
+1.087 times the audio produced, mean 1.040, clearing 1.0 twice. The threshold sits
+inside the spread, so this is enforced as a straddling band rather than as a pass or a
+fail — see `tests/perf/gates.py`. Blackhole clears it every run with 35 % of headroom.
+The lever is the flow decoder and vocoder per chunk rather than the AR decode: n300's
+8×8 grid runs that work well behind a 13×10 Blackhole grid.
 
 Chunked synthesis is unaffected on Wormhole, and always was: the content check,
 `test_device_streamed_matches_non_streamed`, runs on n300 and passes.
@@ -392,14 +404,14 @@ cause is now established and whose remedy is known but does not yet ship cleanly
    symptoms of it, unrelated to each other beyond sharing that cause. One:
    `synthesize_streaming`'s interleaved audio gets corrupted across a chunk seam,
    diagnosed with a known remedy that is not shipped — it hangs a Blackhole perf test.
-   Two, separately: `test_device_streaming_first_audio_latency` hangs Wormhole,
-   cause not established. A previous entry here called it an upstream TTNN defect and
-   named re-seeding a trace's buffers after execution; that was withdrawn when the
-   probe behind it turned out to be compiling kernels under a live trace, which the
-   real path does not do.
-   `docs/VALIDATION.md` has both full accounts, including what was ruled out for each
-   and the design constraint the second one leaves (the flow decoder and vocoder must
-   be warmed before the AR decode trace is captured).
+   Two, separately, and now closed: `test_device_streaming_first_audio_latency` used to
+   hang Wormhole. It captured its decode trace before `prefill()` had run, so the
+   prefill compiled under a live trace. It warms the prefill first as of 2026-09-03,
+   runs on all three boards, and the perf tier has no skips. What it revealed is in §5:
+   n300 does not reliably sustain real time on the interleaved schedule.
+   `docs/VALIDATION.md` has the full account, including the design constraint that
+   remains — every path the traced code touches, the flow decoder and vocoder and the
+   prefill alike, must be warmed before the AR decode trace is captured.
 
 4. An n300/Blackhole streaming amplitude difference on one synthetic case, found
    while diagnosing the above and not yet explained. Which figure is wrong is not

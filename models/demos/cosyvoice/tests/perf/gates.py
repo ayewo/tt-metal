@@ -88,6 +88,10 @@ GATES: dict[str, Gate] = {
         # Stage 3 -- stretch targets.
         Gate("tok_s_stretch", "semantic token generation", "Stage 3 stretch", 60.0, AT_LEAST, " tok/s"),
         Gate("rtf_stretch", "real-time factor", "Stage 3 stretch", 0.2, BELOW, ""),
+        # Stage 3 -- the interleaved schedule. Expressed as a ratio of streamed wall
+        # time to the audio produced, so it means the same thing at any utterance
+        # length; below 1.0 is "a player never starves once playback has started".
+        Gate("stream_realtime", "interleaved streaming sustains real time", "Stage 3", 1.0, BELOW, " x audio"),
     )
 }
 
@@ -98,6 +102,35 @@ GATES: dict[str, Gate] = {
 @dataclass(frozen=True)
 class Meets:
     """The gate is cleared on this architecture; assert the gate itself."""
+
+
+@dataclass(frozen=True)
+class Straddles:
+    """The threshold sits *inside* this measurement's run-to-run spread.
+
+    Neither of the other two verdicts can state this honestly. `Meets` fails on the
+    runs that come in over the line, `Misses` fails on the runs that come in under it,
+    and both are the same measurement behaving normally -- so whichever you picked, the
+    suite would flake at the rate the distribution crosses the threshold, and the flake
+    would be indistinguishable from a real regression.
+
+    So this asserts the band and nothing about the direction. `passes of n` records what
+    was actually observed when the figure was characterised, which is the honest claim:
+    not "it misses", but "it missed seven times in nine, by this much". A later shift in
+    either direction moves the mean out of the band and fails, which is the behaviour
+    that matters; a single run landing on the other side of the threshold does not,
+    because that is what a straddling distribution does.
+
+    Use it only with a characterised distribution -- a handful of runs is not enough to
+    know a threshold is inside the spread rather than outside it. See
+    `tests/perf/README` and PERF.md for the runs behind the figures here.
+    """
+
+    recorded: float
+    tol: float
+    passes: int
+    of: int
+    lever: str
 
 
 @dataclass(frozen=True)
@@ -130,6 +163,14 @@ BLACKHOLE = {
     "rtf_stretch": Misses(
         0.385, 0.35, "no op-level lever left; needs a smaller decoder or multi-chip tensor parallelism"
     ),
+    # Interleaved streaming, 3 runs on p150a: 2.125, 2.133 and 2.125 s of wall time for
+    # 3.27 s of audio -- a ratio of 0.649 with 35 % of headroom, cleared every run. The
+    # spread across the three is 8 ms, the tightest measurement in this file.
+    #
+    # Blackhole ships the plain decoder here, because `kv_inplace_default` is false on
+    # this architecture; forcing the in-place one gives 2.017 s (0.617) but that is not
+    # what runs, so it is not what is recorded.
+    "stream_realtime": Meets(),
 }
 
 # These figures are from n300 specifically. A different Wormhole part will trip the
@@ -161,6 +202,26 @@ WORMHOLE = {
         "3.2 ms against a measured 10.9, so it is the compute grid rather than tuning",
     ),
     "rtf_stretch": Misses(0.55, 0.20, "same lever as the 0.5 gate, and further from it"),
+    # **The one straddling figure in this file, and the reason `Straddles` exists.**
+    # Thirteen runs on n300 in the shipped configuration gave ratios from 0.961 to
+    # 1.087, mean 1.040, clearing the gate twice. The threshold is inside the spread,
+    # not outside it, so neither `Meets` nor `Misses` can describe it without flaking at
+    # the rate the distribution crosses the line.
+    #
+    # An earlier characterisation of the same thing read 22 % over rather than 2.5 %.
+    # That was measured before the prefill warm-up let this test use the in-place
+    # decoder and the full trace region -- the configuration, not the part, was what
+    # made the gap look decisive. Both figures were true of their own runs; only this
+    # one describes what the port actually does.
+    "stream_realtime": Straddles(
+        1.040,
+        0.15,
+        2,
+        13,
+        "the flow decoder and vocoder per chunk, not the AR decode -- n300's 8x8 grid "
+        "runs that work well behind a 13x10 Blackhole grid, so closing it needs either "
+        "a coarser chunk schedule or the wider grid",
+    ),
 }
 
 EXPECTATIONS = {"blackhole": BLACKHOLE, "wormhole": WORMHOLE}
@@ -201,6 +262,24 @@ def enforce(key: str, measured: float, device, *, extra: str = "") -> str:
     verdict = EXPECTATIONS[arch_key(device)][key]
     arch = arch_key(device)
     suffix = f"  [{extra}]" if extra else ""
+
+    if isinstance(verdict, Straddles):
+        lo = verdict.recorded * (1 - verdict.tol)
+        hi = verdict.recorded * (1 + verdict.tol)
+        line = (
+            f"{gate.describe():<52} measured {measured:8.3f}   STRADDLES, in band "
+            f"[{lo:.3f}, {hi:.3f}], cleared {verdict.passes}/{verdict.of} when "
+            f"characterised{suffix}\n    lever: {verdict.lever}"
+        )
+        assert lo <= measured <= hi, (
+            f"{gate.stage} gate {gate.describe()} on {arch}: measured {measured:.3f}, outside the "
+            f"recorded band [{lo:.3f}, {hi:.3f}] around {verdict.recorded}. This measurement "
+            f"straddles the threshold ({verdict.passes} of {verdict.of} runs cleared it when it "
+            f"was characterised), so a single run on either side of {gate.target} is expected -- "
+            f"what is not expected is the value leaving the band. Re-characterise and update "
+            f"PERF.md and this table together."
+        )
+        return line
 
     if isinstance(verdict, Meets):
         line = f"{gate.describe():<52} measured {measured:8.3f}   {'PASS' if gate.passes(measured) else 'FAIL'}{suffix}"
