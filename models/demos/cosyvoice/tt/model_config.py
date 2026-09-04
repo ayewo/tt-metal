@@ -18,9 +18,21 @@ from dataclasses import dataclass, field
 
 import ttnn
 
-# Weights may be stored bfloat8_b to halve bandwidth. On TTM-R1 this bought 5-7%
-# at large batch with PCC >= 0.99 preserved (CLAUDE.md Stage 5), so it is offered
-# but stays opt-in until measured on this model.
+# Weights may be stored bfloat8_b to halve what DRAM has to deliver.
+#
+# **These two are not what the AR decoder reads, and for a long time nothing read them
+# at all.** `COSYVOICE_WEIGHT_BF8` was resolved here, into `WEIGHTS_DTYPE` and
+# `CosyVoiceConfig.weights_dtype` below, and no construction site passed either to the
+# decoder -- so the flag was inert everywhere except one perf test that hard-codes the
+# dtype. The resolution now lives in `tt/llm/decoder.py:weights_dtype_default`, beside
+# `kv_inplace_default`, because it has to be per-*device*: the trade is worth 1.06x on
+# Wormhole and 0.99x on Blackhole, so the default follows the architecture and a
+# module-level constant read at import cannot express that.
+#
+# They are kept because `CosyVoiceConfig` is a description of the model's shape that
+# other code may read, and removing a public field is a separate change. Treat
+# `weights_dtype_default` as the authority; this is a default for anything that has no
+# device to ask.
 WEIGHT_BF8 = os.environ.get("COSYVOICE_WEIGHT_BF8", "0") == "1"
 WEIGHTS_DTYPE = ttnn.bfloat8_b if WEIGHT_BF8 else ttnn.bfloat16
 ACTIVATIONS_DTYPE = ttnn.bfloat16

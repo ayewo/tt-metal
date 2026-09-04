@@ -24,8 +24,8 @@ is the thing this structure exists to prevent.
 
 | | |
 |---|---|
-| Commit | ``c84b4f151b6`` |
-| Date | 2026-08-30 |
+| Commit | ``12c1f718798`` |
+| Date | 2026-09-03 |
 | tt-metal | `571b1e0395` (the C++/ttnn build the model was overlaid onto) |
 | Boards | Blackhole `p150a`, Blackhole `p150b`, Wormhole n300 |
 | Configurations | host; `pcc`+`e2e`; `perf` × {default, `COSYVOICE_FF2_GRID=8x2`, `COSYVOICE_KV_INPLACE=1`} |
@@ -50,7 +50,10 @@ pytest models/demos/cosyvoice/tests/perf/ -v -s                         # and ag
 board runs a few per cent slower on identical work because the active cooler sustains a
 higher clock. That difference is the same order as several of the optimisations in Part
 II, so the two stay separate columns throughout and neither backfills the other's
-empty cells. Accuracy is unaffected — PCC matches to ten digits across both.
+cells. Accuracy is close but not identical between them: of the eight PCC rows in §7,
+four match to ten digits and four agree only to the third or fourth decimal — enough
+that quoting one board's figure for the other would be wrong in the digits that table
+prints, which is why it prints all three.
 
 The n300 result is one Wormhole B0 chip — nothing in this port is multi-chip.
 `docs/VALIDATION.md`'s *device matrix* has the full reasoning.
@@ -60,13 +63,20 @@ The n300 result is one Wormhole B0 chip — nothing in this port is multi-chip.
 | tier | count | needs | result |
 |---|---:|---|---|
 | host | 113 | nothing | 113 passed on all three boards |
-| `pcc` + `e2e` | 150 | `/dev/tenstorrent` | 148 passed 2 skipped / 149 passed 1 skipped |
+| `pcc` + `e2e` | 150 | `/dev/tenstorrent` | 149 passed, 1 skipped, on all three boards |
 | `perf` | 14 | `/dev/tenstorrent` | 14 passed, on each of the three configurations, on all three boards |
 
-The device tier re-runs the host tier (it lives in `tests/pcc/`), which is why 150 is
-not 113 + 37. One test is skipped with its reason attached — end-to-end batched
-synthesis, blocked by a pre-existing device defect; `docs/VALIDATION.md` has the
-account.
+150 is the 113 host-tier tests re-run with a device attached, plus the 37 that need one
+— the host tier lives in `tests/pcc/`, so collecting `tests/pcc/ tests/e2e/` picks it up
+again. `tests/` collects 164 in total: 113 host and 51 device, of which 14 are the `perf`
+tier above. One test is skipped with its reason attached — end-to-end batched synthesis,
+blocked by a pre-existing device defect; `docs/VALIDATION.md` has the account.
+
+**The three boards now run the same tests.** Until 2026-09-03 n300 skipped two more —
+both of the tests that drive the *interleaved* streaming schedule, one in `e2e` and one
+in `perf` — because that schedule hung there. The hang was the tests' own capture
+order rather than the schedule, and §10 item 3 has the account. Removing it is what
+makes this row a single figure instead of two.
 
 ## 2. The requirements, and the verdict on each
 
@@ -83,14 +93,20 @@ stops doing so, the run fails and both are updated together.
 
 | requirement | target | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|---:|
-| Semantic token generation | `>= 30 tok/s` | `201.3 tok/s` ✅ | `192.1 tok/s` ✅ | `130.6 tok/s` ✅ |
-| Semantic token generation (stretch) | `>= 60 tok/s` | `201.3 tok/s` ✅ | `192.1 tok/s` ✅ | `130.6 tok/s` ✅ |
-| Real-time factor | `< 0.5` | `0.342` ✅ | `0.362` ✅ | `0.552` ❌ |
-| Real-time factor (stretch) | `< 0.2` | `0.342` ❌ | `0.362` ❌ | `0.552` ❌ |
+| Semantic token generation | `>= 30 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `150.6 tok/s` ✅ |
+| Semantic token generation (stretch) | `>= 60 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `150.6 tok/s` ✅ |
+| Real-time factor | `< 0.5` | `0.343` ✅ | `0.370` ✅ | `0.497` — straddles, 7 of 18 |
+| Real-time factor (stretch) | `< 0.2` | `0.343` ❌ | `0.370` ❌ | `0.497` ❌ |
 
 Best of each configuration; §3 breaks them out. `RTF < 0.5` is the only requirement
-whose verdict differs by architecture, and the gap is the compute grid: 64 cores against
-130, on a decode step dominated by weight traffic.
+whose verdict differs by architecture, and n300's is a **straddle rather than a miss**:
+over eighteen runs of the shipped configuration the figure ranges `0.489`–`0.524` with a
+median of `0.5025` and clears `0.5` seven times. Eighteen runs of the previous default
+ranged `0.535`–`0.562` and cleared it none. What closed most of that gap was two levers
+already in the tree — `bfloat8_b` decoder weights, whose flag was read by nothing, and the
+`8x2` FF2 core grid, which was opt-in on the strength of cross-session comparisons; both
+are now Wormhole defaults (§9). What remains is the compute grid: 64 cores against 130, on
+a decode step whose linears are already near TTNN's optimum.
 
 `RTF < 0.2` is not met anywhere and has a floor rather than being simply unmet —
 see §3.4.
@@ -115,10 +131,15 @@ the LLM does not.
 
 | stage | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| LLM (14-block AR decoder, traced, fused attention) | `5.72 ms/token × 164 = 0.938 s` · RTF `0.287` | `5.93 ms/token × 164 = 0.973 s` · RTF `0.297` | `7.85 ms/token × 164 = 1.288 s` · RTF `0.393` |
-| Flow decoder (10 Euler steps, traced, fused SDPA) | `0.256 s` · RTF `0.078` | `0.285 s` · RTF `0.087` | `0.451 s` · RTF `0.138` |
-| HiFT vocoder | `0.047 s` · RTF `0.014` | `0.059 s` · RTF `0.018` | `0.072 s` · RTF `0.022` |
-| **Total** | **`1.241 s` · RTF `0.379`** | **`1.317 s` · RTF `0.402`** | **`1.811 s` · RTF `0.553`** |
+| LLM (14-block AR decoder, traced, fused attention) | `5.72 ms/token × 164 = 0.938 s` · RTF `0.287` | `5.92 ms/token × 164 = 0.972 s` · RTF `0.297` | `6.64 ms/token × 164 = 1.089 s` · RTF `0.333` |
+| Flow decoder (10 Euler steps, traced, fused SDPA) | `0.255 s` · RTF `0.078` | `0.286 s` · RTF `0.087` | `0.464 s` · RTF `0.142` |
+| HiFT vocoder | `0.047 s` · RTF `0.014` | `0.067 s` · RTF `0.021` | `0.073 s` · RTF `0.022` |
+| **Total** | **`1.240 s` · RTF `0.379`** | **`1.325 s` · RTF `0.405`** | **`1.626 s` · RTF `0.497`** |
+
+The n300 column moved on 2026-09-04, when `bfloat8_b` weights and the `8x2` FF2 grid
+became its defaults: the decode step went `7.67 → 6.64 ms/token` and the total
+`1.802 → 1.626 s`. Blackhole is unchanged — neither lever does anything there, which is
+why both follow `device.arch()` rather than shipping one setting for both parts.
 
 The LLM is 76 % of an utterance at `p150a`'s default settings, the flow decoder 21 % and
 the vocoder 4 %. That split is why every optimisation in Part II is aimed at the decode
@@ -129,9 +150,9 @@ reach (§3.4).
 
 | configuration | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| default | `0.379` | `0.402` | `0.553` |
-| `COSYVOICE_FF2_GRID=8x2` | `0.354` | `0.378` | `0.552` |
-| `COSYVOICE_KV_INPLACE=1` | `0.342` | `0.362` | `0.564` |
+| default | `0.379` | `0.405` | `0.497` |
+| `COSYVOICE_FF2_GRID=8x2` | `0.355` | `0.377` | measures the default |
+| `COSYVOICE_KV_INPLACE=1` | `0.343` | `0.370` | measures the default |
 
 The defaults differ by architecture on purpose: `kv_inplace_default` reads
 `device.arch()` and turns the in-place KV cache on for Wormhole and off for Blackhole,
@@ -139,13 +160,35 @@ because the trade differs by part (Part II §1.4). So the n300 "default" column 
 *is* the in-place cache, and its explicit row measures the same thing twice — which is
 worth keeping, because a drift between them would mean the default stopped being read.
 
+**Two of the n300 rows now re-measure the default**, because both flags became its
+default on 2026-09-04. That is worth keeping rather than deleting, for the reason above:
+a drift between a row and the default it re-measures would mean the architecture dispatch
+stopped being read, which is precisely the failure that hid `COSYVOICE_WEIGHT_BF8` for a
+month.
+
+Both were measured before being promoted, against a baseline bracketed in the same
+session rather than against another session's run:
+
+| n300, bracketed against baseline `0.539` | RTF | |
+|---|---:|---:|
+| `COSYVOICE_FF2_GRID=8x2` alone | `0.521` | `−3.4 %`, 3 of 3 |
+| `COSYVOICE_WEIGHT_BF8=1` alone | `0.524` | `−3.0 %`, 3 of 3 |
+| both, 18 runs | `0.5025` median | `−6.9 %` |
+
+The bracket is what made those readable. Measured *across* sessions
+`COSYVOICE_FF2_GRID` had come in below, level with and above the default on n300 in three
+successive full-suite runs, and was recorded here as not reliably positive on that basis.
+It is reliably positive; the earlier comparisons were between runs of a board that drifts
+measurably over hours — the baseline alone moves from `0.537`–`0.540` early in a session
+to `0.535`–`0.556` late in one.
+
 ### 3.3 Semantic-token throughput
 
 | configuration | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| default | `174.8 tok/s` | `168.5 tok/s` | `127.3 tok/s` |
-| `COSYVOICE_FF2_GRID=8x2` | `190.7 tok/s` | `184.0 tok/s` | `130.6 tok/s` |
-| `COSYVOICE_KV_INPLACE=1` | `201.3 tok/s` | `192.1 tok/s` | `128.0 tok/s` |
+| default | `174.8 tok/s` | `168.8 tok/s` | `150.6 tok/s` |
+| `COSYVOICE_FF2_GRID=8x2` | `190.6 tok/s` | `183.4 tok/s` | measures the default |
+| `COSYVOICE_KV_INPLACE=1` | `201.2 tok/s` | `190.5 tok/s` | measures the default |
 
 Against a `>= 30 tok/s` requirement and a `>= 60 tok/s` stretch target. The *untraced*
 control, measured in the same process, is in §6.
@@ -153,7 +196,7 @@ control, measured in the same process, is in §6.
 ### 3.4 Why `RTF < 0.2` is not reachable here
 
 Not a tuning shortfall, and the arithmetic says so. `0.2` on this utterance is a budget
-of `0.654 s` total. The flow decoder alone spends about `0.256 s` of it after a
+of `0.654 s` total. The flow decoder alone spends about `0.255 s` of it after a
 fused SDPA and a cross-utterance trace cache, and its cost is 64 transformer blocks × 10
 Euler steps — the Euler count is a model parameter, and halving it buys `1.43×` at a
 PCC below every threshold here (Part II §2.2). The LLM's share would need the decode
@@ -174,17 +217,32 @@ Per-utterance decode cost, `max_len = 384`, mean of 32 steps, at each board's de
 
 | batch | `p150a` | `p150b` | n300 |
 |---:|---:|---:|---:|
-| **1** | `5.70 ms` (1.00×) | `6.02 ms` (1.00×) | `11.47 ms` (1.00×) |
-| **2** | `4.58 ms` (1.24×) | `4.82 ms` (1.25×) | `8.64 ms` (1.33×) |
-| **4** | `4.11 ms` (1.39×) | `4.32 ms` (1.39×) | `7.47 ms` (1.53×) |
-| **8** | `3.77 ms` (1.51×) | `3.97 ms` (1.52×) | `6.96 ms` (1.65×) |
+| **1** | `5.71 ms` (1.00×) | `6.15 ms` (1.00×) | `11.63 ms` (1.00×) |
+| **2** | `4.59 ms` (1.24×) | `4.70 ms` (1.31×) | `8.78 ms` (1.32×) |
+| **4** | `4.11 ms` (1.39×) | `4.34 ms` (1.42×) | `7.54 ms` (1.54×) |
+| **8** | `3.79 ms` (1.51×) | `4.00 ms` (1.54×) | `6.86 ms` (1.69×) |
 
-At `B = 8` the per-utterance decode cost falls to about `3.77 ms` on `p150a`, `3.97 ms`
-on `p150b` and `6.96 ms` on n300 — a `1.51×`–`1.65×` improvement on the *same* kernels,
+At `B = 8` the per-utterance decode cost falls to about `3.79 ms` on `p150a`, `4.00 ms`
+on `p150b` and `6.86 ms` on n300 — a `1.51×`–`1.69×` improvement on the *same* kernels,
 with nothing changed but how many rows one weight read serves. The ratio is nearly
-identical across the two architectures, which is what a bandwidth-limited step predicts.
+identical across the two architectures, which is what a bandwidth-limited step predicts;
+n300 gains slightly more because its step starts further from the bandwidth floor.
 
-It compounds with `COSYVOICE_FF2_GRID`, which is not obvious in advance — the two attack the same matmul. With the flag on, `p150a` reaches `3.17 ms` per utterance at `B = 8` (`1.66×` against that configuration's own `B = 1`), and `p150b` reaches `3.39 ms` (`1.63×`). Batching amortises the weight *read*; the grid flag fixes how the reduction is split. They are different bottlenecks and they add.
+It compounds with `COSYVOICE_FF2_GRID`, which is not obvious in advance — the two attack
+the same matmul. With the flag on, per-utterance cost at `B = 8` reaches `3.21 ms` on
+`p150a`, `3.31 ms` on `p150b` and `5.94 ms` on n300, each against that configuration's
+own `B = 1`:
+
+| | `p150a` | `p150b` | n300 |
+|---|---:|---:|---:|
+| `B = 1`, `COSYVOICE_FF2_GRID=8x2` | `5.24 ms` | `5.69 ms` | `11.15 ms` |
+| `B = 8`, `COSYVOICE_FF2_GRID=8x2` | `3.21 ms` (1.63×) | `3.31 ms` (1.72×) | `5.94 ms` (1.88×) |
+
+Batching amortises the weight *read*; the grid flag fixes how the reduction is split.
+They are different bottlenecks and they add — and they add on all three boards, which
+is the part that was not obvious. n300 compounds them furthest, to `1.88×`, even though
+the flag is worth almost nothing to it end to end (§3.2): the decode step is where the
+flag acts, and end-to-end that step is diluted by a flow stage it does not touch.
 
 Correctness first, and at ragged prefixes. `test_device_batched_decode_matches_single`
 steps four sequences with prompt lengths `209, 177, 241, 193` together and against each
@@ -215,26 +273,62 @@ captured prefix and stepped for every token.
 
 | | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| LLM alone, all 164 steps | `0.956 s` | `1.025 s` | — |
-| batch schedule, first audio = total | `1.569 s` | `1.744 s` | — |
-| streaming, first audio | `1.313 s` | `1.493 s` | — |
-| streaming, total | `2.139 s` | `2.464 s` | — |
-| first-audio gain | **`1.19×`** | **`1.17×`** | — |
-| cost of interleaving, on the total | `1.36×` | `1.41×` | — |
+| LLM alone, all 164 steps | `0.949 s` | `1.020 s` | `1.215 s` |
+| batch schedule, first audio = total | `1.560 s` | `1.770 s` | `2.198 s` |
+| streaming, first audio | `1.306 s` | `1.539 s` | `1.879 s` |
+| streaming, total | `2.127 s` | `2.536 s` | `3.118 s` |
+| first-audio gain | **`1.19×`** | **`1.15×`** | **`1.17×`** |
+| cost of interleaving, on the total | `1.36×` | `1.43×` | `1.42×` |
+| streamed total ÷ audio produced | `0.650` | `0.776` | **`0.954`** |
 
-The n300 column is empty because *this test* still hangs Wormhole — not because
-the interleaved schedule does. The distinction matters and is recent: the shipped path,
-`CosyVoiceTTNN.synthesize_streaming`, does run on n300, and
-`test_device_streaming_generates_the_same_tokens_as_batch` exercises it there and
-passes. What has no Wormhole timing is this head-to-head measurement.
+Each column is one run. The n300 figures move by a few per cent between runs, and the
+last row is the one that crosses a threshold, so its distribution is given below rather
+than inferred from this column.
 
-The test wedges the board — log frozen, JIT cache flat, needing a reset — where both
-Blackhole boards run the identical code over identical geometries. Ruled out: the trace
-region size, the warm-before-capture ordering, and the `StreamState` fix that cured the
-corruption described in §10. The untested lead is that this test holds one decode trace
-live across four passes while `synthesize_streaming` captures and releases per call.
-It skips on Wormhole with that reason rather than hanging the rest of the run; §10 and
-`docs/VALIDATION.md` carry the detail.
+**The n300 column moved on 2026-09-04, and this gate is now met there.** The levers were
+chosen to speed the AR decode step for the RTF gate; this schedule is dominated by the
+flow decoder and vocoder *per chunk*, so no gain was expected here. It arrived anyway,
+because the decode runs once per token and the chunk work does not.
+
+**This test is measurably slower inside the tier than on its own, and the column above is
+the in-tier figure.** Run alone in its own process, nine times, the ratio is `0.814`–
+`0.886`, median `0.825`. Run as the fourteenth test of the `perf` tier — which is how the
+certification runs it, and what this column reports — it is `0.954`. Both clear `1.0`, and
+the gate asserts only that, but the 16 % gap between them is real and worth naming: a
+figure measured in isolation is not the figure the suite produces. The isolated nine are
+the distribution evidence behind the `Meets`; this column is what a certification run
+sees.
+
+The first row is the control the other rows are read against: the same 164 decode steps
+with neither schedule's flow or vocoder work attached. Subtracting it says what
+interleaving actually costs — `1.18 s` of flow and vocoder on `p150a` against `2.11 s`
+on n300, on identical work — which is the same 8×8-against-13×10 grid gap that the last
+row turns on.
+
+**The n300 column is new.** This test ran on Blackhole only until 2026-09-03, because it
+wedged n300 — and the reason turned out to be that it captured its decode trace before
+`prefill()` had ever run, so the prefill compiled its kernels under a live trace and the
+board froze in the next thing to allocate, the vocoder's conv weight preparation. One
+prefill before capture fixes it. The certified RTF test never hit this because it has
+always prefilled before capturing.
+
+Removing that fault also removed two workarounds built on top of it. The test had asked
+for a 64 MB trace region rather than the suite's 384 MB, and used the single-trace
+decoder rather than the in-place one, both to avoid the same hang; with the warm-up in
+place it uses the suite's region and the decoder `kv_inplace_default` selects, and the
+n300 schedule runs 9–15 % faster than it did without them.
+
+What the skip was hiding was a real limitation, and it has since closed. Characterised
+in September 2025 at the then-defaults, n300 did **not** reliably sustain real time: 13
+runs between `0.961` and `1.087`, mean `1.040`, clearing `1.0` twice — enforced as a
+straddling band rather than a pass or a fail. Re-characterised at the 2026-09-04
+defaults it clears **9 runs of 9**, between `0.814` and `0.886`, median `0.825`, with
+11 % of headroom at its worst run, and the gate is a `Meets` on both architectures.
+
+The re-characterisation was not optional and not a hunch: two perf configurations failed
+with *"measured 0.884, outside the recorded band"* — a value that had left the band on
+the fast side, which `gates.py` treats as a failure exactly because a stale published
+figure is the thing it exists to catch. It was right; the figure was stale by 20 %.
 
 Chunked synthesis is unaffected on Wormhole, and always was: the content check,
 `test_device_streamed_matches_non_streamed`, runs on n300 and passes.
@@ -259,17 +353,17 @@ rather than historical.
 
 | | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| AR decode step, untraced (fixed-width cache) | `19.29 ms` | `23.60 ms` | `19.97 ms` |
-| AR decode step, traced | `5.72 ms` | `6.03 ms` | `11.70 ms` |
-| trace speedup | **`3.37×`** | **`3.92×`** | **`1.71×`** |
-| moving KV cache, traced | `5.71 ms` | `6.20 ms` | `10.80 ms` |
-| in-place KV cache, traced | `4.96 ms` | `5.39 ms` | `8.31 ms` |
-| `bfloat16` weights, traced step | `5.48 ms` | `5.83 ms` | `8.35 ms` |
-| `bfloat8_b` weights, traced step | `5.48 ms` | `5.62 ms` | `7.75 ms` |
+| AR decode step, untraced (fixed-width cache) | `19.20 ms` | `23.26 ms` | `20.39 ms` |
+| AR decode step, traced | `5.76 ms` | `6.08 ms` | `11.23 ms` |
+| trace speedup | **`3.33×`** | **`3.83×`** | **`1.82×`** |
+| moving KV cache, traced | `5.83 ms` | `6.13 ms` | `9.96 ms` |
+| in-place KV cache, traced | `5.02 ms` | `5.30 ms` | `7.61 ms` |
+| `bfloat16` weights, traced step | `5.47 ms` | `5.74 ms` | `8.28 ms` |
+| `bfloat8_b` weights, traced step | `5.50 ms` | `5.78 ms` | `7.79 ms` |
 
 Trace capture is the single largest lever in the port and it is bit-exact — `test_device_traced_matches_untraced` checks that at PCC `1.0` before any of these timings are believed. The in-place KV cache is the second, and it is *not* bit-exact (worst PCC `0.9987` over 72 steps, non-accumulating), which is why it ships as an architecture-dependent default rather than as the only mechanism.
 
-`bfloat8_b` weights are a memory option, not a speed one. Halving the weight width moves the traced step by about a per cent in either direction across the three boards — inside run-to-run noise. The decode step is not weight-*bandwidth* limited in the way that would predict; Part II §1.3 has what limits it instead. `COSYVOICE_WEIGHT_BF8` stays available for the 352 → 176 MB it saves.
+`bfloat8_b` weights are a memory option on Blackhole and a small speed one on Wormhole, and the split is the interesting part. Halving the weight width leaves the traced step `0.99×` on both Blackhole boards — a per cent the wrong way, inside run-to-run noise — and gives `1.06×` on n300. That is what a step which is not weight-*bandwidth* limited looks like on the wider part and marginally is on the narrower one; Part II §1.3 has what limits it instead. Accuracy holds either way, at hidden-state PCC `0.9995`–`0.9997` against `bfloat16` across the three boards. `COSYVOICE_WEIGHT_BF8` stays off by default and available for the 352 → 176 MB it saves, plus that 6 % where it happens to pay.
 
 ### The growing KV cache, and why the fixed-width one exists
 
@@ -279,9 +373,9 @@ compile. Measured in this run, on the growing cache:
 
 | | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| cold pass, mean of 32 — what a real utterance gets | `41.51 ms` | `65.68 ms` | `61.46 ms` |
-| warm pass, second time over the same sizes | `19.47 ms` | `23.20 ms` | `20.55 ms` |
-| compile share of the cold pass | `53.1 %` | `64.7 %` | `66.6 %` |
+| cold pass, mean of 32 — what a real utterance gets | `42.19 ms` | `69.21 ms` | `58.52 ms` |
+| warm pass, second time over the same sizes | `19.33 ms` | `22.85 ms` | `19.87 ms` |
+| compile share of the cold pass | `54.2 %` | `67.0 %` | `66.0 %` |
 
 The cold figure depends on what the machine's JIT cache already holds, so it is the one
 number here that is not portable — it is reported because the *ratio* is the point, not
@@ -290,24 +384,39 @@ for a whole utterance, which is what makes generation practical at all.
 
 ## 7. Accuracy
 
-| module | PCC |
-|---|---:|
-| tokens → waveform (reference excitation) | `0.9951367159` |
-| flow: tokens → mel | `0.9993962895` |
-| whole HiFT vocoder | `0.9996373743` |
-| LLM AR prefill, 209 tokens | `0.9997530373` |
-| LLM AR decode step | `0.9989617190` |
-| traced vs untraced decode | `1.0000000000` (bit-exact) |
-| iSTFT vs captured golden | `0.9999298811` |
-| batched vs single-row decode | `0.9999998808` (p150a) / `0.9999998808` (p150b) / `0.9985343218` (n300) |
+PCC is a per-board measurement, not a property of the port, so every row carries all
+three. An earlier revision of this table gave one unattributed column; two of its
+figures matched no board in the run it cited, which is what a single column invites.
 
-| check | value | target |
-|---|---:|---:|
-| Token agreement, teacher-forced | `99.04 %` | `> 95 %` ✅ |
-| Token agreement, through the KV cache | `100.00 %` | `> 95 %` ✅ |
-| Streaming vs batch generation, greedy | `100.00 %` | — |
-| WER (English) | `0.00 %` | `< 3.0` ✅ |
-| Speaker similarity (mean, 10 utterances) | `83–96` | `> 60` ✅ |
+| module | `p150a` | `p150b` | n300 |
+|---|---:|---:|---:|
+| tokens → waveform (reference excitation) | `0.9965027711` | `0.9960437125` | `0.9947304108` |
+| flow: tokens → mel | `0.9994578949` | `0.9993992586` | `0.9994118177` |
+| whole HiFT vocoder | `0.9996373743` | `0.9996373743` | `0.9996358182` |
+| LLM AR prefill, 209 tokens | `0.9997530373` | `0.9997423663` | `0.9995400821` |
+| LLM AR decode step | `0.9989617190` | `0.9995185735` | `0.9987986883` |
+| traced vs untraced decode | `1.0000000000` | `1.0000000000` | `1.0000000000` |
+| iSTFT vs captured golden | `0.9999298811` | `0.9999298811` | `0.9999298811` |
+| batched vs single-row decode | `0.9999998808` | `0.9999998808` | `0.9985343218` |
+
+Two rows are worth reading rather than scanning. `traced vs untraced` is bit-exact on
+every board, which is what licenses every timing in §6. And `batched vs single-row` is
+four orders of magnitude looser on n300 than on Blackhole — `0.9985` against
+`0.99999988` — which is a real architectural difference in the batched matmul's
+accumulation, not noise; it is why the test carries a per-architecture floor rather
+than one number.
+
+| check | `p150a` | `p150b` | n300 | target |
+|---|---:|---:|---:|---:|
+| Token agreement, teacher-forced | `99.04 %` | `99.52 %` | `99.04 %` | `> 95 %` ✅ |
+| Token agreement, through the KV cache | `100.00 %` | `100.00 %` | `100.00 %` | `> 95 %` ✅ |
+| Streaming vs batch generation, greedy | `100.00 %` | `100.00 %` | `100.00 %` | — |
+| WER (English) | `0.00 %` | — | — | `< 3.0` ✅ |
+| Speaker similarity (mean, 10 utterances) | `83–96` | — | — | `> 60` ✅ |
+
+The last two rows are single-board by necessity rather than by omission — they need the
+reference venv's whisper and `WavLMForXVector`, and that scoring runs where the host has
+the memory for it. Everything above them is measured on each board it is quoted for.
 
 WER and speaker similarity are produced by `scripts/eval_wer_sim.py` in the reference
 venv — whisper `large-v3` and `WavLMForXVector`, neither of which tt-metal's
@@ -318,7 +427,8 @@ The waveform-PCC check injects the reference excitation deliberately. f0 error
 integrates into phase drift, and holding drift under a tenth of a cycle across 72 192
 samples needs mean f0 error below `0.03 Hz` — tighter than Tensix HiFi4 delivers. That
 is a model property, not a defect; with a self-computed excitation the metrics that
-still hold are the energy envelope (`0.9975`) and RMS (within 6 %).
+still hold are the energy envelope — `0.9965` (p150a) / `0.9943` (p150b) / `0.9978`
+(n300) — and RMS, which lands `5.8 %`–`6.4 %` above the reference on all three.
 
 ## 8. Generation modes and speech quality
 
@@ -356,22 +466,29 @@ from this document; each row names where its number lives.
 | flag | default | what it does | what it is worth |
 |---|---|---|---|
 | `COSYVOICE_KV_INPLACE` | follows `device.arch()` — on for Wormhole, off for Blackhole | writes the KV cache with `ttnn.update_cache` instead of rebuilding it | §3.2, §6 |
-| `COSYVOICE_FF2_GRID` | unset | explicit core grid for the FFN's second linear at decode (`T == 1` only) | §3.2; Part II §4.2 |
+| `COSYVOICE_FF2_GRID` | follows `device.arch()` — `8x2` on Wormhole, TTNN's own choice on Blackhole; `off` forces TTNN's | explicit core grid for the FFN's second linear at decode (`T == 1` only) | §3.2; Part II §4.2 |
 | `COSYVOICE_SDPA_DECODE` | `1` | fused `sdpa_decode` for the AR decoder's relative-position attention | Part II §1.1 |
 | `COSYVOICE_SDPA` | `1` | fused SDPA in the flow estimator | Part II §2.1 |
 | `COSYVOICE_CFM_TRACE_CACHE` | `1` | keeps the CFM estimator trace across utterances of the same mel length | Part II §2.2 |
 | `COSYVOICE_GN_PERMUTE` | unset (matmul form) | restores the permute-based GroupNorm | Part II §2.3 |
 | `COSYVOICE_FLOW_STEPS` | `10` | Euler solver depth | Part II §2.2 |
-| `COSYVOICE_FIDELITY` | `HiFi4` | math fidelity for the matmuls | §7 |
+| `COSYVOICE_FIDELITY` | `HiFi4` | math fidelity for the matmuls, in all three stages | §6 — `HiFi3` and `HiFi2` are both a wash |
 | `COSYVOICE_HIFT_TRACE` | unset (per-stream heuristic) | forces vocoder trace capture on or off | Part II §3 |
-| `COSYVOICE_WEIGHT_BF8` | `0` | `bfloat8_b` decoder linear weights | §6 — a memory option, not a speed one |
-| `COSYVOICE_FLOW_BF8` | `0` | `bfloat8_b` flow-estimator weights | carries its own measurement |
+| `COSYVOICE_WEIGHT_BF8` | follows `device.arch()` — on for Wormhole, off for Blackhole | `bfloat8_b` decoder linear weights | §6 |
+| `COSYVOICE_FLOW_BF8` | `0` | `bfloat8_b` flow-estimator weights | §6 — measured, and it buys nothing |
 | `COSYVOICE_FP32_ACC` | `1` | fp32 accumulation in the vocoder convolutions | Part II §3.2 |
 | `COSYVOICE_CONV_PREPARE` | unset (per-geometry verification) | overrides the prepared-weight verdict | Part II §3.2 |
 | `COSYVOICE_INPUTS` | unset | where the prompt `.npz` files live, for the two API tests | `docs/VALIDATION.md` |
 
-Two flags are opt-in because the best setting is not portable, not because they are
-risky: `COSYVOICE_FF2_GRID`, and `COSYVOICE_KV_INPLACE` on Blackhole.
+Three flags follow `device.arch()` rather than carrying one setting for both parts —
+`COSYVOICE_KV_INPLACE`, `COSYVOICE_WEIGHT_BF8` and `COSYVOICE_FF2_GRID` — because each is
+worth something real on Wormhole and nothing on Blackhole. Each is overridable in both
+directions, and each names the function that resolves it in `tt/llm/decoder.py`, so the
+model and the tests that measure the model read one place.
+
+`COSYVOICE_FF2_GRID` still exists as a flag rather than being hard-coded because the best
+*shape* is not portable: `4x8`, the same sixteen cores transposed, manages `1.15×` on
+n300 against `8x2`'s `1.50×`.
 
 ## 10. Known limitations
 
@@ -392,14 +509,17 @@ cause is now established and whose remedy is known but does not yet ship cleanly
    symptoms of it, unrelated to each other beyond sharing that cause. One:
    `synthesize_streaming`'s interleaved audio gets corrupted across a chunk seam,
    diagnosed with a known remedy that is not shipped — it hangs a Blackhole perf test.
-   Two, separately: `test_device_streaming_first_audio_latency` hangs Wormhole,
-   cause not established. A previous entry here called it an upstream TTNN defect and
-   named re-seeding a trace's buffers after execution; that was withdrawn when the
-   probe behind it turned out to be compiling kernels under a live trace, which the
-   real path does not do.
-   `docs/VALIDATION.md` has both full accounts, including what was ruled out for each
-   and the design constraint the second one leaves (the flow decoder and vocoder must
-   be warmed before the AR decode trace is captured).
+   Two, separately, and now closed: `test_device_streaming_first_audio_latency` used to
+   hang Wormhole. It captured its decode trace before `prefill()` had run, so the
+   prefill compiled under a live trace. It warms the prefill first as of 2026-09-03,
+   runs on all three boards, and the perf tier has no skips. The e2e tier's
+   `test_device_streaming_generates_the_same_tokens_as_batch` had been skipped on n300
+   with the same reason and also runs there now, so both tiers match across the three
+   boards (§1). What the perf skip revealed is in §5:
+   n300 does not reliably sustain real time on the interleaved schedule.
+   `docs/VALIDATION.md` has the full account, including the design constraint that
+   remains — every path the traced code touches, the flow decoder and vocoder and the
+   prefill alike, must be warmed before the AR decode trace is captured.
 
 4. An n300/Blackhole streaming amplitude difference on one synthetic case, found
    while diagnosing the above and not yet explained. Which figure is wrong is not
@@ -429,10 +549,10 @@ construction. What is left here is the comparisons that would need a second tree
 | change | effect |
 |---|---|
 | fixed-width KV cache | **73×** on the first pass — a growing cache gives every token a new shape and so a fresh JIT compile; 98.9 % of the cold cost was compilation. Part I §6. |
-| trace capture, both compute stages | `3.37×` (`p150a`) / `3.92×` (`p150b`) / `1.71×` (n300) on the decode step. Part I §6. |
+| trace capture, both compute stages | `3.33×` (`p150a`) / `3.83×` (`p150b`) / `1.82×` (n300) on the decode step. Part I §6. |
 | fused decode attention (`sdpa_decode` with the rel-pos term as its mask) | `−17.1 %` on the step; `3.3×`–`3.4×` on the attention block alone. §1.1. |
 | hoisting `linear_pos` out of the decode step | `15.71 → 8.25 ms`. §1.2. |
-| in-place KV via `ttnn.update_cache` | `1.30×` on n300, `1.15×` on Blackhole — the one change that pays more on the slower part. Part I §6. |
+| in-place KV via `ttnn.update_cache` | `1.31×` on n300, `1.16×` on Blackhole — the one change that pays more on the slower part. Part I §6. |
 | cached CFM trace | `2.37×` on the solver on `p150b`, `1.67×` on n300. §2.2. |
 | fused SDPA in the flow estimator | faster and more accurate on every check — `0.707 → 0.600 s`. §2.1. |
 | `rel_shift` → one slice at `T = 1` | seven ops become one. §1.2. |
@@ -440,24 +560,40 @@ construction. What is left here is the comparisons that would need a second tree
 
 ### The RTF journey, in order applied
 
-Each row adds one change to the row above it — the order the work actually happened
-in, not the ranking above:
+Each row adds one change to the row above it — the order the work actually happened in,
+not the ranking above. **Every row is a flag combination that still exists**, so unlike
+the rest of Part II this table does not need a second tree: it was re-measured on all
+three boards on 2026-09-03, one process per row, cumulative left to right.
 
-| | `p150a` | `p150b` | n300 |
-|---|---:|---:|---:|
-| explicit chain, no CFM cache | `0.533` | `0.584` | `0.950` |
-| + fused decode attention | `0.477` ✅ | `0.523` | `0.891` |
-| + cached CFM trace | *`0.367` projected* | `0.436` ✅ | — |
-| + in-place KV (`COSYVOICE_KV_INPLACE=1`) | `0.449` ✅ | `0.398` ✅ | `0.628` |
-| + permute-free GroupNorm (and, on n300, the conv fix) | — | `0.365` ✅ | `0.575` |
+| | flags added | `p150a` | `p150b` | n300 |
+|---|---|---:|---:|---:|
+| explicit chain, no CFM cache | `SDPA_DECODE=0`, `CFM_TRACE_CACHE=0`, `KV_INPLACE=0`, `GN_PERMUTE=1` | `0.533` | `0.579` | `0.931` |
+| + fused decode attention | `SDPA_DECODE=1` | `0.476` ✅ | `0.524` | `0.864` |
+| + cached CFM trace | `CFM_TRACE_CACHE=1` | `0.415` ✅ | `0.437` ✅ | `0.779` |
+| + in-place KV | `KV_INPLACE=1` | `0.381` ✅ | `0.400` ✅ | `0.627` |
+| + permute-free GroupNorm | `GN_PERMUTE` unset | `0.344` ✅ | `0.369` ✅ | `0.575` |
 
-The last row is a median over four runs on `p150b` and six on n300, not a single
-result — the flow stage varies ~5 % run to run on n300, and the first figure this row
-was written with was the best of the set rather than the middle of it. Rows above it
-are single runs, fine while changes were worth 10–20 % and not fine at this scale.
-`p150a` became unreachable partway through; its gaps are left empty rather than filled
-from the other board. `COSYVOICE_KV_INPLACE` becoming the architecture-aware default
-moved the last row's numbers again — §3.2 has the current ones.
+Every prefix is `COSYVOICE_`. The last row is each board's shipped configuration with
+the in-place cache forced on, so it should agree with §3.2's `COSYVOICE_KV_INPLACE=1`
+row, and it does: `0.344`/`0.343`, `0.369`/`0.370`, `0.575`/`0.566`.
+
+**Re-measuring corrected two figures and filled three holes.** The earlier version of
+this table had `p150a` unreachable partway through and carried a *projected* `0.367`
+for the CFM-cache row; measured, that row is `0.415`, so the projection was optimistic
+by 12 %. It also had `p150a`'s in-place-KV row at `0.449` — *above* the row it was
+supposed to improve on — which is what a single run of a measurement with a ~5 %
+flow-stage spread can look like when it lands badly. Measured now, every row improves
+on the one above it on every board, which is the shape the sequence should have had all
+along. What has not changed is the ranking: the two largest steps are still the CFM
+trace cache and the in-place KV cache, in that order, on all three boards.
+
+One honesty note on provenance. These are the flag differences measured against
+*today's* tree, not a reconstruction of the trees each change originally landed on, so
+the rows carry other work that arrived since. That mostly does not show — rows 1, 2, 4
+and 5 land within a couple of per cent of the original figures on the boards that had
+them — but on n300 the first two rows are now `0.931` and `0.864` against `0.950` and
+`0.891`, and the Wormhole `conv1d` workaround is in every row here rather than only the
+last, which is the difference the original table's parenthesis was flagging.
 
 ## 1. The AR decode step
 
@@ -519,9 +655,13 @@ what the fused matmul saved). Op count is a proxy for cost, not the cost.
 
 Three candidates, measured rather than reasoned about:
 
-* Not weight bandwidth. `bfloat8_b` weights measure `1.00×` at two different
-  effective bandwidths, so `COSYVOICE_WEIGHT_BF8` ships as a *memory* option
-  (352 → 176 MB), not a speed one.
+* Not weight bandwidth **on Blackhole**, which is the part this was measured on, and
+  the qualifier turned out to matter. `bfloat8_b` weights measure `1.00×` here at two
+  different effective bandwidths. On n300 the same A/B measures `1.06×` on the step and
+  `0.540 → 0.524` end to end, so `COSYVOICE_WEIGHT_BF8` is now the Wormhole default and
+  stays off on Blackhole (Part I §6, §9). The 352 → 176 MB is a bonus on both.
+  A conclusion drawn on one part and stated for both is how the lever that closed
+  Wormhole's `RTF < 0.5` gap went unpulled for a month.
 * Not the four linears. They are 34 % of the step (`2.82 ms` across 14 layers) and
   already near TTNN's default grid optimum.
 * A per-op dispatch floor of ~6.3 µs, flat in tensor size, across the ~280

@@ -88,6 +88,10 @@ GATES: dict[str, Gate] = {
         # Stage 3 -- stretch targets.
         Gate("tok_s_stretch", "semantic token generation", "Stage 3 stretch", 60.0, AT_LEAST, " tok/s"),
         Gate("rtf_stretch", "real-time factor", "Stage 3 stretch", 0.2, BELOW, ""),
+        # Stage 3 -- the interleaved schedule. Expressed as a ratio of streamed wall
+        # time to the audio produced, so it means the same thing at any utterance
+        # length; below 1.0 is "a player never starves once playback has started".
+        Gate("stream_realtime", "interleaved streaming sustains real time", "Stage 3", 1.0, BELOW, " x audio"),
     )
 }
 
@@ -98,6 +102,35 @@ GATES: dict[str, Gate] = {
 @dataclass(frozen=True)
 class Meets:
     """The gate is cleared on this architecture; assert the gate itself."""
+
+
+@dataclass(frozen=True)
+class Straddles:
+    """The threshold sits *inside* this measurement's run-to-run spread.
+
+    Neither of the other two verdicts can state this honestly. `Meets` fails on the
+    runs that come in over the line, `Misses` fails on the runs that come in under it,
+    and both are the same measurement behaving normally -- so whichever you picked, the
+    suite would flake at the rate the distribution crosses the threshold, and the flake
+    would be indistinguishable from a real regression.
+
+    So this asserts the band and nothing about the direction. `passes of n` records what
+    was actually observed when the figure was characterised, which is the honest claim:
+    not "it misses", but "it missed seven times in nine, by this much". A later shift in
+    either direction moves the mean out of the band and fails, which is the behaviour
+    that matters; a single run landing on the other side of the threshold does not,
+    because that is what a straddling distribution does.
+
+    Use it only with a characterised distribution -- a handful of runs is not enough to
+    know a threshold is inside the spread rather than outside it. See
+    `tests/perf/README` and PERF.md for the runs behind the figures here.
+    """
+
+    recorded: float
+    tol: float
+    passes: int
+    of: int
+    lever: str
 
 
 @dataclass(frozen=True)
@@ -118,49 +151,114 @@ class Misses:
 # `p150a`/`p150b` pair -- the two differ by ~5 % through cooling, so the bands below
 # are the union of both rather than one board's.
 BLACKHOLE = {
-    # End-to-end traced decode: 174.8 tok/s default on p150a, 168.5 on p150b, 201.3 with
-    # the in-place KV cache. Every configuration clears both gates by a wide margin.
+    # End-to-end traced decode clears both gates in every configuration on both boards,
+    # by a factor approaching three against the stretch target. PERF.md section 3.3 has
+    # the figures; they are not repeated here, because a comment that restates a
+    # published number is a second place for it to go stale.
     "tok_s": Meets(),
     "tok_s_stretch": Meets(),
-    # 0.379 default on p150a, 0.402 on p150b, 0.342 best (p150a, in-place KV cache).
+    # Cleared in every configuration on both boards; PERF.md section 3.2 has the figures.
     "rtf": Meets(),
     # Reaching 0.2 needs the LLM decode step under 1.5 ms on its own; the step is
-    # 4.98 ms at its best measured and is bandwidth-bound on the AR decoder's weights.
-    # Band is centred between the two boards' default configurations.
+    # around 5 ms at its best measured and is bandwidth-bound on the AR decoder's
+    # weights. Band is centred between the two boards' default configurations.
     "rtf_stretch": Misses(
         0.385, 0.35, "no op-level lever left; needs a smaller decoder or multi-chip tensor parallelism"
     ),
+    # Interleaved streaming clears this on both boards every run, with 22 % of headroom
+    # on the slower one and 35 % on the faster -- the widest margin of any gate here,
+    # and the reason this is a `Meets` while the same gate straddles on Wormhole.
+    # Repeated runs on p150a agreed to within 8 ms, the tightest measurement in this
+    # file, so the verdict is not resting on one sample.
+    #
+    # Blackhole ships the plain decoder here, because `kv_inplace_default` is false on
+    # this architecture. Forcing the in-place one is faster still, but that is not what
+    # runs, so it is not what is recorded.
+    "stream_realtime": Meets(),
 }
 
 # These figures are from n300 specifically. A different Wormhole part will trip the
 # band below rather than silently inherit n300's verdict, which is the intended
 # behaviour -- see the module docstring.
 WORMHOLE = {
-    # End-to-end traced decode: 127.3 tok/s default, 130.6 with COSYVOICE_FF2_GRID,
-    # 128.0 with the in-place KV cache made explicit. That last row measures the same
-    # thing as the default -- `kv_inplace_default` reads the architecture and turns the
-    # in-place cache on for Wormhole -- and lands within noise of it, as it should.
+    # End-to-end traced decode clears both gates in every configuration, by a factor of
+    # two against the stretch target. The three configurations land within a few per
+    # cent of each other, as they should: `kv_inplace_default` reads the architecture
+    # and turns the in-place cache on for Wormhole, so the explicit in-place row
+    # measures the same thing as the default. PERF.md section 3.3 has the figures.
     "tok_s": Meets(),
     "tok_s_stretch": Meets(),
-    # 0.553 / 0.552 / 0.564 across the certification run's three configurations
-    # (PERF.md Part I ~S3.2). The full-suite run twenty minutes earlier, at a tree
-    # differing only in this file, measured 0.539 / 0.554 / 0.542 -- so **the same board
-    # moves ~2.6 % between runs**, which is the flow decoder's documented run-to-run
-    # variation and is precisely why the band is +/-20 % rather than tight. The centre
-    # sits between the two runs rather than on either.
+    # Three full-suite runs of the same three configurations on the same board, at
+    # trees differing only in this directory, measured 0.539 / 0.554 / 0.542, then
+    # 0.553 / 0.552 / 0.564, then 0.550 / 0.562 / 0.566 -- so **the same board spans
+    # about 5 % across runs of identical work**, which is the flow decoder's documented
+    # run-to-run variation and is precisely why the band is +/-20 % rather than tight.
+    # The centre sits between the runs rather than on any one of them, and PERF.md
+    # section 3.2 publishes the latest.
     #
-    # **`COSYVOICE_FF2_GRID=8x2` does not help on this part.** It lands within noise of
-    # the default (0.552 against 0.553), where an earlier vintage had it winning clearly
-    # (0.577 -> 0.550). The flag stays opt-in and Blackhole-favoured for exactly this
-    # reason: its best shape is not portable, and on n300 its benefit is not even
-    # reliably positive.
-    "rtf": Misses(
-        0.55,
-        0.20,
-        "no flag closes this on n300; it needs the 64-core grid's decode step under "
-        "3.2 ms against a measured 10.9, so it is the compute grid rather than tuning",
+    # **`COSYVOICE_FF2_GRID=8x2` does not help on this part**, and across those three
+    # runs it has come in below the default, level with it, and above it -- which is
+    # what "within noise" means when you have enough samples to say it. An earlier
+    # vintage had it winning clearly. The flag stays opt-in and Blackhole-favoured for
+    # exactly this reason: its best shape is not portable, and on n300 its end-to-end
+    # benefit is not reliably positive, even though it is worth a real 1.04x on the
+    # decode step it actually touches.
+    # **This was a `Misses` at 0.55 and is now a straddle at 0.499**, because two levers
+    # that were already in the tree started working. `COSYVOICE_WEIGHT_BF8` never reached
+    # the decoder -- nothing read the dtype it set -- and `COSYVOICE_FF2_GRID` was opt-in
+    # on the strength of three cross-session runs that read it as unreliable here. Wired
+    # up and made architecture defaults, they are worth -3.0 % and -3.4 % individually,
+    # bracketed, and together they move the median from 0.539 to 0.499.
+    #
+    # Eighteen runs of the shipped configuration across two sessions, pooled because the
+    # two disagree in a way that matters: nine on a cool board read 0.489-0.520 and
+    # cleared 5, nine on the same board after several hours of continuous work read
+    # 0.492-0.524 and cleared 2. Neither is the number; both together are. Against
+    # eighteen baseline runs spanning 0.535-0.562 that cleared it **zero** times, the
+    # shipped default clears it seven times in eighteen with a median of 0.5025.
+    #
+    # The discipline is worth restating because it nearly failed twice here. The first
+    # three runs of this configuration read 0.489/0.493/0.497, and a sibling
+    # configuration's first three read 0.488/0.490/0.491 -- either would have been
+    # published as a clean pass. At n=9 both straddled.
+    "rtf": Straddles(
+        0.5025,
+        0.15,
+        7,
+        18,
+        "the remaining gap is the compute grid: 64 cores against 130, on a decode step "
+        "whose linears are 34 % of it and already near TTNN's optimum. Closing it needs "
+        "fewer ops rather than faster ones -- graph-level fusion, or the wider part",
     ),
-    "rtf_stretch": Misses(0.55, 0.20, "same lever as the 0.5 gate, and further from it"),
+    "rtf_stretch": Misses(0.5025, 0.20, "same lever as the 0.5 gate, and far from it"),
+    # **The one straddling figure in this file, and the reason `Straddles` exists.**
+    # Thirteen runs on n300 in the shipped configuration gave ratios from 0.961 to
+    # 1.087, mean 1.040, clearing the gate twice. The threshold is inside the spread,
+    # not outside it, so neither `Meets` nor `Misses` can describe it without flaking at
+    # the rate the distribution crosses the line.
+    #
+    # An earlier characterisation of the same thing read 22 % over rather than 2.5 %.
+    # That was measured before the prefill warm-up let this test use the in-place
+    # decoder and the full trace region -- the configuration, not the part, was what
+    # made the gap look decisive. Both figures were true of their own runs; only this
+    # one describes what the port actually does.
+    # **This was a straddle and is now met.** Characterised at 1.040 with 2 of 13 runs
+    # clearing, when the shipped default was bfloat16 weights and TTNN's own FF2 grid.
+    # Re-characterised at the 2026-09-04 defaults: 0.814 0.814 0.820 0.825 0.825 0.828
+    # 0.836 0.852 0.886 -- nine of nine, median 0.825, 11 % of headroom at the worst run.
+    #
+    # The gate is what forced the re-characterisation rather than a hunch. Two perf
+    # configurations failed with "measured 0.884, outside the recorded band [0.884,
+    # 1.196]" -- a value that had left the band on the *fast* side, which this module
+    # treats as a failure precisely because a stale published figure is what it exists to
+    # catch. It was right: the figure was stale by 20 %.
+    #
+    # Worth noting where the win came from, because it was not aimed here. The levers
+    # were chosen to move the AR decode step for the RTF gate; this schedule is dominated
+    # by the flow decoder and vocoder *per chunk*, and its old lever text said so. A
+    # 13 % faster decode step still moved it from 1.040 to 0.825, because the decode runs
+    # once per token and the chunk work does not.
+    "stream_realtime": Meets(),
 }
 
 EXPECTATIONS = {"blackhole": BLACKHOLE, "wormhole": WORMHOLE}
@@ -201,6 +299,24 @@ def enforce(key: str, measured: float, device, *, extra: str = "") -> str:
     verdict = EXPECTATIONS[arch_key(device)][key]
     arch = arch_key(device)
     suffix = f"  [{extra}]" if extra else ""
+
+    if isinstance(verdict, Straddles):
+        lo = verdict.recorded * (1 - verdict.tol)
+        hi = verdict.recorded * (1 + verdict.tol)
+        line = (
+            f"{gate.describe():<52} measured {measured:8.3f}   STRADDLES, in band "
+            f"[{lo:.3f}, {hi:.3f}], cleared {verdict.passes}/{verdict.of} when "
+            f"characterised{suffix}\n    lever: {verdict.lever}"
+        )
+        assert lo <= measured <= hi, (
+            f"{gate.stage} gate {gate.describe()} on {arch}: measured {measured:.3f}, outside the "
+            f"recorded band [{lo:.3f}, {hi:.3f}] around {verdict.recorded}. This measurement "
+            f"straddles the threshold ({verdict.passes} of {verdict.of} runs cleared it when it "
+            f"was characterised), so a single run on either side of {gate.target} is expected -- "
+            f"what is not expected is the value leaving the band. Re-characterise and update "
+            f"PERF.md and this table together."
+        )
+        return line
 
     if isinstance(verdict, Meets):
         line = f"{gate.describe():<52} measured {measured:8.3f}   {'PASS' if gate.passes(measured) else 'FAIL'}{suffix}"

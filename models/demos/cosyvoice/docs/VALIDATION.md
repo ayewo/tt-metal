@@ -87,7 +87,7 @@ shipped (see below).
 | Valid audio, 5 languages | ✅ 20/20 | `demo/sweep.py` — all four modes × zh/en/ja/ko/yue | *Speech quality* |
 | Verifiable against the PyTorch reference | ✅ | `tests/pcc/` PCC checks; `test_device_tokens_to_waveform` end to end | *Accuracy* |
 | `>= 30 tok/s` semantic generation | ✅ | checked — see the table above | *Semantic-token throughput* |
-| `RTF < 0.5` | ✅ Blackhole · ❌ n300 | checked, with the n300 shortfall held to a recorded band | *End-to-end real-time factor* |
+| `RTF < 0.5` | ✅ Blackhole · ~ n300, straddles | checked, with n300's spread held to a recorded band and its pass rate recorded with it | *End-to-end real-time factor* |
 | Token accuracy `> 95 %` | ✅ | `test_gate1_teacher_forced_argmax_match`, `..._through_the_kv_cache`, `test_gate2_free_running_greedy` | *Accuracy* |
 | WER `< 3.0`, speaker similarity `> 60` | ✅ | `scripts/eval_wer_sim.py`, reference venv | *Speech quality* |
 | Setup and run instructions | ✅ | [`../README.md`](../README.md) | — |
@@ -118,7 +118,7 @@ shipped (see below).
 | Minimize token generation latency | ✅ | `test_device_traced_throughput`, `test_device_inplace_throughput` | *The LLM decode step* |
 | **Batch processing for multiple utterances** | ✅ decode batched and checked; end-to-end batched synthesis blocked by a pre-existing device defect (below) | `test_device_batched_decode_matches_single` (correctness, ragged prefixes), `test_device_batched_decode_throughput` (the sweep, checked) | *Batched decode* |
 | Efficient sampling strategies | ✅ top-k / top-p / RAS, host-side **by measurement** | `test_nucleus_filter_*`, `test_ras_*`, `scripts/profile_token_tail.py` | *The LLM decode step* |
-| **Pipeline semantic generation with acoustic modeling** | ✅ | `test_device_streaming_first_audio_latency` (both schedules, all three stages real; Blackhole), `test_device_streaming_generates_the_same_tokens_as_batch` (the shipped API, all three boards) | *Streaming* |
+| **Pipeline semantic generation with acoustic modeling** | ✅ | `test_device_streaming_first_audio_latency` (both schedules, all three stages real), `test_device_streaming_generates_the_same_tokens_as_batch` (the shipped API) — both on all three boards as of 2026-09-03 | *Streaming* |
 | Optimize flow decoder computation | ✅ | `test_device_solve_euler_matches_golden`; trace-cache timing | *The flow decoder* |
 | Minimize memory and TM overheads | ✅ `permute` removed from the decode step | `scripts/count_decode_ops.py` | *Removing token-independent recomputation* |
 | Speculative decoding | ❌ **not explored** — see below | — | — |
@@ -144,14 +144,35 @@ is bandwidth-limited on the AR decoder's weights. Both figures are in `PERF.md`
 *End-to-end real-time factor*; the threshold is enforced against a recorded band so a
 future improvement cannot pass unnoticed.
 
-### `RTF < 0.5` on Wormhole n300
+### `RTF < 0.5` on Wormhole n300 — a straddle, not a miss
 
-Met on both Blackhole boards, not met on n300, and n300 is a named target — so this
-is reported on its own rather than folded into a Blackhole result. The gap is the
-compute grid:
-8 × 8 = 64 cores against Blackhole's 13 × 10 = 130, on a decode step whose cost is
-dominated by weight traffic. `COSYVOICE_FF2_GRID=8x2` closes part of it. The lever and
-the measured band are in `PERF.md` and in `tests/perf/gates.py`'s `WORMHOLE` table.
+Met on both Blackhole boards. On n300 the threshold now sits **inside** the
+measurement's spread rather than above it: over eighteen runs of the shipped
+configuration the figure ranges `0.489`–`0.524` with a median of `0.5025`, clearing
+`0.5` seven times. Eighteen runs of the previous default ranged `0.535`–`0.562` and
+cleared it **zero** times.
+
+n300 is a named target, so this is reported on its own rather than folded into a
+Blackhole result, and it is enforced as a `Straddles` band in `tests/perf/gates.py` —
+the same verdict class the interleaved-streaming gate needs, and for the same reason:
+a threshold inside a distribution is neither a pass nor a fail, and calling it either
+would need only some of the runs.
+
+**Two levers closed most of the gap, and both were already in the tree.** `bfloat8_b`
+decoder weights were unreachable — the flag that selected them was read by nothing — and
+the `8x2` FF2 core grid was opt-in on the strength of cross-session comparisons that read
+it as unreliable on this part. Wired up and made architecture defaults they are worth
+`-3.0 %` and `-3.4 %` individually, measured against a baseline bracketed in the same
+session, and together they move the median `0.539 → 0.5025` at no accuracy cost — the
+full `pcc`+`e2e` tier passes 149/1 on n300 with them on. `PERF.md` §3 and §6 have the
+figures and Part II §1.3 has the correction that made them findable.
+
+What remains is not tuning. Every flag in the port has now been measured on this part;
+`COSYVOICE_FLOW_BF8` and `COSYVOICE_FIDELITY` move nothing on either. The residue is the
+compute grid — 8 × 8 = 64 cores against Blackhole's 13 × 10 = 130 — on a decode step whose
+linears are already near TTNN's optimum and whose remainder sits on a per-op dispatch
+floor. That is an op-*count* problem, and closing it needs graph-level fusion or the wider
+part.
 
 ### Speculative decoding — not explored, and the reason is structural
 
@@ -219,12 +240,11 @@ live and clobbered by a later `execute_trace`. TTNN warns about exactly this: *"
 buffers may be corrupted once a trace is executed."*
 
 The remedy is known and is not in the tree. Parking those four on the host between
-chunks (`to_torch` out, `from_torch` back) fixes the audio — verified on `p150a` and
-n300. It is not shipped because it hangs `tests/perf/test_streaming_perf.py` on
-Blackhole, where that test otherwise passes in 12.7 s; the A/B is one commit apart on
-one board. Also tried and
-rejected: draining the queue before the readback, and hoisting the synthesizer out of
-the traced region.
+chunks (`to_torch` out, `from_torch` back) fixes the audio — verified on one board of
+each architecture, Blackhole and Wormhole. It is not shipped because it hangs
+`tests/perf/test_streaming_perf.py` on Blackhole, where that test otherwise passes in
+12.7 s; the A/B is one commit apart on one board. Also tried and rejected: draining the
+queue before the readback, and hoisting the synthesizer out of the traced region.
 
 So the defect stands, with `synthesize` as the checked path for audio, and the
 schedule itself checked by
@@ -232,44 +252,72 @@ schedule itself checked by
 tokens and that chunks are emitted *during* generation, both of which hold. What is
 not yet deliverable is correct audio out of the interleaved path.
 
-### `test_streaming_perf` hangs on Wormhole — open
+### `test_streaming_perf` on Wormhole — was a hang, now a measured limit
 
-`tests/perf/test_streaming_perf.py::test_device_streaming_first_audio_latency` wedges
-n300: log frozen, JIT cache flat, CPU pegged, board needing a reset. Both Blackhole
-boards run it. It is skipped on Wormhole with that reason attached rather than left to
-hang, because a wedged board costs every later test in the run.
+`tests/perf/test_streaming_perf.py::test_device_streaming_first_audio_latency` wedged
+n300 for months and was skipped there. It is not skipped any more: the perf tier runs
+14 of 14 on all three boards.
 
-The cause is not established, and one candidate has been eliminated.
+**Two tests skipped on n300 for this, and both now run.** The other was
+`tests/e2e/test_pipeline_api.py::test_device_streaming_generates_the_same_tokens_as_batch`,
+skipped with the same reason — *"the interleaved schedule hangs Wormhole n300"* — which
+made the e2e tier 148 passed and 2 skipped on n300 against 149 and 1 on Blackhole. Its
+skip came off first and its pass was never re-recorded; the run of 2026-09-03 has it
+passing in 33 s and puts all three boards on 149 passed, 1 skipped, with the one
+remaining skip the L1_SMALL defect above. Neither of these was a property of the
+interleaved schedule, which is the point: one fault, two skips, and a whole architecture
+column that read worse than it was.
 
-An earlier revision of this document named an upstream TTNN defect: re-seeding a
-trace's persistent buffers after that trace had executed. That is withdrawn. The probe
-it rested on captured its trace before the first `prefill()` had ever run, so the
-prefill compiled its kernels under a live trace — a property of the probe, not of the
-path it was standing in for. Adding a warm-up before capture removes the hang on both
+**The cause was the test's own capture order.** It captured its decode trace before
+`prefill()` had ever run, so the prefill compiled its kernels under a live trace, and
+the board froze in the next thing to allocate — the vocoder's conv weight preparation,
+right after Metal's warning that *"Allocating device buffers is unsafe due to the
+existence of an active trace"*. One prefill before capture fixes it, on both
 architectures:
 
-| sequence, one variable apart | Wormhole n300 | Blackhole p150a |
+| sequence, one variable apart | Wormhole | Blackhole |
 |---|---|---|
-| capture, then first prefill | hangs at the second seed | hangs at `close_device` |
+| capture, then first prefill | hangs | hangs at `close_device` |
 | one prefill, then capture | clean, teardown included | clean, teardown included |
 
-Four passes of seed plus 164 traced steps, warmed, complete in 14.7 s on n300 and
-8.7 s on p150a. So the decode-only sequence is ruled out, along with the re-seed and
-the trace's lifetime on their own.
+The columns are architectures, not boards: the A/B was run on one board of each, and
+what it separates is Wormhole's failure mode from Blackhole's, not one card from
+another. The fix it produced is what the perf tier then checks on all three boards,
+every run.
 
-What remains is the work this test runs *under* the live trace and
-`synthesize_streaming` does not: the flow decoder and the vocoder, repeatedly, across
-four passes. That is where to look next, and it is a narrowing rather than a diagnosis.
+`test_pipeline_perf` never hit this because it has always prefilled before capturing.
+The rule this leaves is general: **every path the traced code will touch — the flow
+decoder, the vocoder, and the prefill alike — must run once before `capture()`.** The
+first two were already warmed here; the prefill was the one that was missed, which is
+why the design constraint recorded in `PERF.md` looked satisfied when it was not.
 
-Ruled out along the way: the trace region size (384 MB → 64 MB changed nothing — it
-captures one trace, not the in-place path's 65); and the `StreamState` fix above.
+**Two workarounds disappeared with it.** The test had asked for a 64 MB trace region
+instead of the suite's 384 MB, and used the single-trace decoder instead of the
+in-place one, both to avoid the same hang and both documented as deliberate. With the
+warm-up in place it uses the suite's region and the decoder `kv_inplace_default`
+selects, and the n300 schedule is 9–15 % faster for it. When a fault is finally found,
+the workarounds that grew around it are worth re-testing.
 
-Two different warm-ups are in play here and they are worth keeping apart. The one this
-test already performs warms the flow decoder and the vocoder before the AR trace is
-captured; reversing that order hangs Blackhole outright, so it is a design constraint
-rather than a lead. The one that mattered for the probe above warms the AR decoder's
-own prefill. This test does not do that second one — its prefill still compiles under
-a live trace, after capture — which makes it the cheapest thing to try next.
+**What the skip was hiding was a real limitation, and it has since closed.** Measured at
+the then-defaults, n300 did not reliably sustain real time on the interleaved schedule:
+13 runs between 0.961 and 1.087, mean 1.040, clearing 1.0 twice — enforced as a
+straddling band rather than a pass or a fail. Re-characterised at the 2026-09-04
+defaults it clears **9 runs of 9**, between 0.814 and 0.886, median 0.825, with 11 % of
+headroom at the worst run. Inside the `perf` tier, where the test runs fourteenth rather
+than alone, the certification measures 0.954 — 16 % slower than in isolation, and still
+clear. The gate is a `Meets` on both architectures.
+
+That re-characterisation was forced by the gate, not chosen: two perf configurations
+failed with *"measured 0.884, outside the recorded band [0.884, 1.196]"* — a figure that
+had left its band on the **fast** side, which `gates.py` treats as a failure because a
+stale published number is what it exists to catch. It was right by 20 %. `PERF.md` §5
+has the figures.
+
+Ruled out along the way, and no longer relevant: the trace region size on its own, and
+the `StreamState` fix above.
+
+Still open, and unchanged by this: the amplitude defect below, and the corruption in
+§*The interleaved schedule's corrupt audio*. Neither is a hang.
 
 ### An n300/Blackhole amplitude difference on a synthetic case — open
 

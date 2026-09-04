@@ -65,8 +65,66 @@ def _core_grid_from_env(var: str):
     val = os.environ.get(var, "").strip().lower()
     if not val:
         return None
+    if val in ("off", "0", "none", "default"):
+        return _EXPLICIT_OFF
     x, _, y = val.partition("x")
     return ttnn.CoreGrid(x=int(x), y=int(y))
+
+
+# Distinguishes "the flag is unset, use the architecture default" from "the flag says
+# switch this off". Without it, `COSYVOICE_FF2_GRID=off` and an unset flag are the same
+# value and the off switch cannot be expressed.
+_EXPLICIT_OFF = object()
+
+
+def weights_dtype_default(dtype=None, device=None):
+    """The AR decoder's weight dtype, resolved from `COSYVOICE_WEIGHT_BF8`.
+
+    **This exists because the flag did not work.** `COSYVOICE_WEIGHT_BF8` set
+    `model_config.WEIGHTS_DTYPE` and `CosyVoiceConfig.weights_dtype`, and nothing read
+    either: every construction site -- `tt/pipeline.py`, `demo/demo.py`, `demo/sweep.py`,
+    `tests/pcc/test_llm.py`, `tests/perf/test_pipeline_perf.py` -- built the decoder
+    without passing `weights_dtype`, which fell back to the activation dtype. So the flag
+    was inert everywhere except `test_device_decode_bfloat8_weights`, which passes
+    `ttnn.bfloat8_b` explicitly and therefore measured a real effect through a path no
+    caller took. `PERF.md` documented the flag as saving 352 -> 176 MB; it saved nothing.
+
+    Resolving it here, in the one place every decoder is built, is the same rule
+    `kv_inplace_default` already follows for the cache mechanism: the model and the test
+    that is supposed to measure the model read one function, so they cannot drift apart.
+    An explicit `weights_dtype` argument still wins, which is what lets
+    `test_device_decode_bfloat8_weights` A/B both dtypes in one process.
+
+    **The default follows the architecture**, the same way `kv_inplace_default` does,
+    because the trade differs by part: `bfloat8_b` measures `1.06x` on n300's decode step
+    and `0.99x` on both Blackhole boards, and end to end it is worth `0.540 -> 0.524` on
+    n300 and nothing on Blackhole. Accuracy is unchanged either way -- the full
+    `pcc`+`e2e` tier passes 149/1 on n300 with it on, at AR prefill PCC `0.9997258485`
+    against `0.9995400821` for `bfloat16`. `COSYVOICE_WEIGHT_BF8=0` forces it off.
+    """
+    env = os.environ.get("COSYVOICE_WEIGHT_BF8")
+    if env is not None:
+        return ttnn.bfloat8_b if env == "1" else (dtype or ttnn.bfloat16)
+    if device is not None and "WORMHOLE" in str(device.arch()):
+        return ttnn.bfloat8_b
+    return dtype or ttnn.bfloat16
+
+
+def ff2_grid_default(device):
+    """The FFN second linear's core grid on `device`, when the flag is unset.
+
+    `8x2` on Wormhole, TTNN's own choice on Blackhole. The flag shipped opt-in because
+    the best *shape* is not portable -- `4x8`, the same sixteen cores transposed, manages
+    only `1.15x` on n300 against `8x2`'s `1.50x` -- and that is still true. What was not
+    true is the stronger claim that grew beside it, that `8x2` is "not reliably positive"
+    end to end on n300. That came from three full-suite runs *in different sessions*, in
+    which it landed below, level with and above the default. Measured against a baseline
+    bracketed in the same session it is a clean win on every run: `0.539 -> 0.521` alone,
+    and it is what carries the shipped configuration under `RTF 0.5` on its better runs.
+
+    `COSYVOICE_FF2_GRID=off` (or `0`) restores TTNN's default; any `NxM` still overrides.
+    """
+    return ttnn.CoreGrid(x=8, y=2) if "WORMHOLE" in str(device.arch()) else None
 
 
 def kv_inplace_default(device) -> bool:
@@ -110,7 +168,11 @@ class TtTransformerLayer:
         # **Decode only.** The optimum is a property of `M = 1`. Prefill runs this same
         # linear at `M = 209`, where there is real work to spread and a 16-core grid would
         # be a pessimisation, so `__call__` applies it only when `T == 1`.
-        self.ff2_grid = _core_grid_from_env("COSYVOICE_FF2_GRID")
+        _grid = _core_grid_from_env("COSYVOICE_FF2_GRID")
+        if _grid is _EXPLICIT_OFF:
+            self.ff2_grid = None
+        else:
+            self.ff2_grid = _grid if _grid is not None else ff2_grid_default(device)
 
     def __call__(
         self,
@@ -157,6 +219,11 @@ class TtARDecoder:
 
     def __init__(self, device, bag, meta, dtype=ttnn.bfloat16, weights_dtype=None):
         self.device, self.dtype, self.meta = device, dtype, meta
+        # Resolved here rather than defaulted to `dtype`, so that every caller -- the
+        # pipeline, the demos and the perf tests alike -- gets the dtype the flag asks
+        # for. See `weights_dtype_default`.
+        weights_dtype = weights_dtype or weights_dtype_default(dtype, device)
+        self.weights_dtype = weights_dtype
         self.cc = accurate_compute_config(device)
         self.d_model = meta["d_model"]
         self.xscale = float(self.d_model) ** 0.5

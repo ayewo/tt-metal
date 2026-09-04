@@ -41,7 +41,7 @@ import ttnn
 
 from ..flow.encoder import TtConformerEncoder, _linear, espnet_rel_positional_encoding
 from ..hifigan.conv import accurate_compute_config
-from .decoder import TtARDecoder, causal_bias
+from .decoder import TtARDecoder, causal_bias, weights_dtype_default
 from .sampling import greedy, ras_sampling
 
 
@@ -58,7 +58,10 @@ class TtTransformerLM:
         and the output head is a single matmul, so neither is worth the accuracy.
         """
         self.device, self.dtype, self.meta = device, dtype, meta
-        self.weights_dtype = weights_dtype or dtype
+        # `weights_dtype_default` resolves `COSYVOICE_WEIGHT_BF8`; recording the same
+        # value the decoder will actually build with keeps this attribute honest, which
+        # it was not while the flag was inert.
+        self.weights_dtype = weights_dtype or weights_dtype_default(dtype, device)
         self.cc = accurate_compute_config(device)
         self.text_meta = meta["text_encoder"]
         self.ar_meta = meta["ar_decoder"]
@@ -79,7 +82,7 @@ class TtTransformerLM:
         self.speech_embedding = ttnn.from_torch(
             self.speech_embedding_host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         )
-        self.decoder = TtARDecoder(device, bag.sub("llm"), self.ar_meta, dtype, weights_dtype)
+        self.decoder = TtARDecoder(device, bag.sub("llm"), self.ar_meta, dtype, self.weights_dtype)
         self.head_w, self.head_b = _linear(device, bag, "llm_decoder", dtype)
         self._causal: dict[int, object] = {}
 
