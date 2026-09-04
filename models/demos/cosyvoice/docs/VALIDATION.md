@@ -303,7 +303,9 @@ the then-defaults, n300 did not reliably sustain real time on the interleaved sc
 13 runs between 0.961 and 1.087, mean 1.040, clearing 1.0 twice — enforced as a
 straddling band rather than a pass or a fail. Re-characterised at the 2026-09-04
 defaults it clears **9 runs of 9**, between 0.814 and 0.886, median 0.825, with 11 % of
-headroom at the worst run. The gate is a `Meets` on both architectures.
+headroom at the worst run. Inside the `perf` tier, where the test runs fourteenth rather
+than alone, the certification measures 0.954 — 16 % slower than in isolation, and still
+clear. The gate is a `Meets` on both architectures.
 
 That re-characterisation was forced by the gate, not chosen: two perf configurations
 failed with *"measured 0.884, outside the recorded band [0.884, 1.196]"* — a figure that

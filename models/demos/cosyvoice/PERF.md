@@ -93,10 +93,10 @@ stops doing so, the run fails and both are updated together.
 
 | requirement | target | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|---:|
-| Semantic token generation | `>= 30 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `150.7 tok/s` ✅ |
-| Semantic token generation (stretch) | `>= 60 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `150.7 tok/s` ✅ |
-| Real-time factor | `< 0.5` | `0.343` ✅ | `0.370` ✅ | `0.487` — straddles, 7 of 18 |
-| Real-time factor (stretch) | `< 0.2` | `0.343` ❌ | `0.370` ❌ | `0.487` ❌ |
+| Semantic token generation | `>= 30 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `150.6 tok/s` ✅ |
+| Semantic token generation (stretch) | `>= 60 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `150.6 tok/s` ✅ |
+| Real-time factor | `< 0.5` | `0.343` ✅ | `0.370` ✅ | `0.497` — straddles, 7 of 18 |
+| Real-time factor (stretch) | `< 0.2` | `0.343` ❌ | `0.370` ❌ | `0.497` ❌ |
 
 Best of each configuration; §3 breaks them out. `RTF < 0.5` is the only requirement
 whose verdict differs by architecture, and n300's is a **straddle rather than a miss**:
@@ -131,14 +131,14 @@ the LLM does not.
 
 | stage | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| LLM (14-block AR decoder, traced, fused attention) | `5.72 ms/token × 164 = 0.938 s` · RTF `0.287` | `5.92 ms/token × 164 = 0.972 s` · RTF `0.297` | `6.64 ms/token × 164 = 1.088 s` · RTF `0.332` |
-| Flow decoder (10 Euler steps, traced, fused SDPA) | `0.255 s` · RTF `0.078` | `0.286 s` · RTF `0.087` | `0.444 s` · RTF `0.136` |
-| HiFT vocoder | `0.047 s` · RTF `0.014` | `0.067 s` · RTF `0.021` | `0.063 s` · RTF `0.019` |
-| **Total** | **`1.240 s` · RTF `0.379`** | **`1.325 s` · RTF `0.405`** | **`1.596 s` · RTF `0.487`** |
+| LLM (14-block AR decoder, traced, fused attention) | `5.72 ms/token × 164 = 0.938 s` · RTF `0.287` | `5.92 ms/token × 164 = 0.972 s` · RTF `0.297` | `6.64 ms/token × 164 = 1.089 s` · RTF `0.333` |
+| Flow decoder (10 Euler steps, traced, fused SDPA) | `0.255 s` · RTF `0.078` | `0.286 s` · RTF `0.087` | `0.464 s` · RTF `0.142` |
+| HiFT vocoder | `0.047 s` · RTF `0.014` | `0.067 s` · RTF `0.021` | `0.073 s` · RTF `0.022` |
+| **Total** | **`1.240 s` · RTF `0.379`** | **`1.325 s` · RTF `0.405`** | **`1.626 s` · RTF `0.497`** |
 
 The n300 column moved on 2026-09-04, when `bfloat8_b` weights and the `8x2` FF2 grid
 became its defaults: the decode step went `7.67 → 6.64 ms/token` and the total
-`1.802 → 1.596 s`. Blackhole is unchanged — neither lever does anything there, which is
+`1.802 → 1.626 s`. Blackhole is unchanged — neither lever does anything there, which is
 why both follow `device.arch()` rather than shipping one setting for both parts.
 
 The LLM is 76 % of an utterance at `p150a`'s default settings, the flow decoder 21 % and
@@ -150,7 +150,7 @@ reach (§3.4).
 
 | configuration | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| default | `0.379` | `0.405` | `0.487` |
+| default | `0.379` | `0.405` | `0.497` |
 | `COSYVOICE_FF2_GRID=8x2` | `0.355` | `0.377` | measures the default |
 | `COSYVOICE_KV_INPLACE=1` | `0.343` | `0.370` | measures the default |
 
@@ -186,7 +186,7 @@ to `0.535`–`0.556` late in one.
 
 | configuration | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| default | `174.8 tok/s` | `168.8 tok/s` | `150.7 tok/s` |
+| default | `174.8 tok/s` | `168.8 tok/s` | `150.6 tok/s` |
 | `COSYVOICE_FF2_GRID=8x2` | `190.6 tok/s` | `183.4 tok/s` | measures the default |
 | `COSYVOICE_KV_INPLACE=1` | `201.2 tok/s` | `190.5 tok/s` | measures the default |
 
@@ -273,13 +273,13 @@ captured prefix and stepped for every token.
 
 | | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| LLM alone, all 164 steps | `0.949 s` | `1.020 s` | `1.104 s` |
-| batch schedule, first audio = total | `1.560 s` | `1.770 s` | `1.956 s` |
-| streaming, first audio | `1.306 s` | `1.539 s` | `1.653 s` |
-| streaming, total | `2.127 s` | `2.536 s` | `2.698 s` |
-| first-audio gain | **`1.19×`** | **`1.15×`** | **`1.18×`** |
-| cost of interleaving, on the total | `1.36×` | `1.43×` | `1.38×` |
-| streamed total ÷ audio produced | `0.650` | `0.776` | **`0.825`** |
+| LLM alone, all 164 steps | `0.949 s` | `1.020 s` | `1.215 s` |
+| batch schedule, first audio = total | `1.560 s` | `1.770 s` | `2.198 s` |
+| streaming, first audio | `1.306 s` | `1.539 s` | `1.879 s` |
+| streaming, total | `2.127 s` | `2.536 s` | `3.118 s` |
+| first-audio gain | **`1.19×`** | **`1.15×`** | **`1.17×`** |
+| cost of interleaving, on the total | `1.36×` | `1.43×` | `1.42×` |
+| streamed total ÷ audio produced | `0.650` | `0.776` | **`0.954`** |
 
 Each column is one run. The n300 figures move by a few per cent between runs, and the
 last row is the one that crosses a threshold, so its distribution is given below rather
@@ -288,8 +288,16 @@ than inferred from this column.
 **The n300 column moved on 2026-09-04, and this gate is now met there.** The levers were
 chosen to speed the AR decode step for the RTF gate; this schedule is dominated by the
 flow decoder and vocoder *per chunk*, so no gain was expected here. It arrived anyway,
-because the decode runs once per token and the chunk work does not: a 13 % faster step
-took the ratio from `1.040` to `0.825`.
+because the decode runs once per token and the chunk work does not.
+
+**This test is measurably slower inside the tier than on its own, and the column above is
+the in-tier figure.** Run alone in its own process, nine times, the ratio is `0.814`–
+`0.886`, median `0.825`. Run as the fourteenth test of the `perf` tier — which is how the
+certification runs it, and what this column reports — it is `0.954`. Both clear `1.0`, and
+the gate asserts only that, but the 16 % gap between them is real and worth naming: a
+figure measured in isolation is not the figure the suite produces. The isolated nine are
+the distribution evidence behind the `Meets`; this column is what a certification run
+sees.
 
 The first row is the control the other rows are read against: the same 164 decode steps
 with neither schedule's flow or vocoder work attached. Subtracting it says what
