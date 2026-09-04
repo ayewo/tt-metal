@@ -61,7 +61,7 @@ class TtTransformerLM:
         # `weights_dtype_default` resolves `COSYVOICE_WEIGHT_BF8`; recording the same
         # value the decoder will actually build with keeps this attribute honest, which
         # it was not while the flag was inert.
-        self.weights_dtype = weights_dtype or weights_dtype_default(dtype)
+        self.weights_dtype = weights_dtype or weights_dtype_default(dtype, device)
         self.cc = accurate_compute_config(device)
         self.text_meta = meta["text_encoder"]
         self.ar_meta = meta["ar_decoder"]

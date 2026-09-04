@@ -203,13 +203,34 @@ WORMHOLE = {
     # exactly this reason: its best shape is not portable, and on n300 its end-to-end
     # benefit is not reliably positive, even though it is worth a real 1.04x on the
     # decode step it actually touches.
-    "rtf": Misses(
-        0.55,
-        0.20,
-        "no flag closes this on n300; it needs the 64-core grid's decode step under "
-        "3.2 ms against a measured 10.9, so it is the compute grid rather than tuning",
+    # **This was a `Misses` at 0.55 and is now a straddle at 0.499**, because two levers
+    # that were already in the tree started working. `COSYVOICE_WEIGHT_BF8` never reached
+    # the decoder -- nothing read the dtype it set -- and `COSYVOICE_FF2_GRID` was opt-in
+    # on the strength of three cross-session runs that read it as unreliable here. Wired
+    # up and made architecture defaults, they are worth -3.0 % and -3.4 % individually,
+    # bracketed, and together they move the median from 0.539 to 0.499.
+    #
+    # Eighteen runs of the shipped configuration across two sessions, pooled because the
+    # two disagree in a way that matters: nine on a cool board read 0.489-0.520 and
+    # cleared 5, nine on the same board after several hours of continuous work read
+    # 0.492-0.524 and cleared 2. Neither is the number; both together are. Against
+    # eighteen baseline runs spanning 0.535-0.562 that cleared it **zero** times, the
+    # shipped default clears it seven times in eighteen with a median of 0.5025.
+    #
+    # The discipline is worth restating because it nearly failed twice here. The first
+    # three runs of this configuration read 0.489/0.493/0.497, and a sibling
+    # configuration's first three read 0.488/0.490/0.491 -- either would have been
+    # published as a clean pass. At n=9 both straddled.
+    "rtf": Straddles(
+        0.5025,
+        0.15,
+        7,
+        18,
+        "the remaining gap is the compute grid: 64 cores against 130, on a decode step "
+        "whose linears are 34 % of it and already near TTNN's optimum. Closing it needs "
+        "fewer ops rather than faster ones -- graph-level fusion, or the wider part",
     ),
-    "rtf_stretch": Misses(0.55, 0.20, "same lever as the 0.5 gate, and further from it"),
+    "rtf_stretch": Misses(0.5025, 0.20, "same lever as the 0.5 gate, and far from it"),
     # **The one straddling figure in this file, and the reason `Straddles` exists.**
     # Thirteen runs on n300 in the shipped configuration gave ratios from 0.961 to
     # 1.087, mean 1.040, clearing the gate twice. The threshold is inside the spread,
