@@ -242,15 +242,23 @@ WORMHOLE = {
     # decoder and the full trace region -- the configuration, not the part, was what
     # made the gap look decisive. Both figures were true of their own runs; only this
     # one describes what the port actually does.
-    "stream_realtime": Straddles(
-        1.040,
-        0.15,
-        2,
-        13,
-        "the flow decoder and vocoder per chunk, not the AR decode -- n300's 8x8 grid "
-        "runs that work well behind a 13x10 Blackhole grid, so closing it needs either "
-        "a coarser chunk schedule or the wider grid",
-    ),
+    # **This was a straddle and is now met.** Characterised at 1.040 with 2 of 13 runs
+    # clearing, when the shipped default was bfloat16 weights and TTNN's own FF2 grid.
+    # Re-characterised at the 2026-09-04 defaults: 0.814 0.814 0.820 0.825 0.825 0.828
+    # 0.836 0.852 0.886 -- nine of nine, median 0.825, 11 % of headroom at the worst run.
+    #
+    # The gate is what forced the re-characterisation rather than a hunch. Two perf
+    # configurations failed with "measured 0.884, outside the recorded band [0.884,
+    # 1.196]" -- a value that had left the band on the *fast* side, which this module
+    # treats as a failure precisely because a stale published figure is what it exists to
+    # catch. It was right: the figure was stale by 20 %.
+    #
+    # Worth noting where the win came from, because it was not aimed here. The levers
+    # were chosen to move the AR decode step for the RTF gate; this schedule is dominated
+    # by the flow decoder and vocoder *per chunk*, and its old lever text said so. A
+    # 13 % faster decode step still moved it from 1.040 to 0.825, because the decode runs
+    # once per token and the chunk work does not.
+    "stream_realtime": Meets(),
 }
 
 EXPECTATIONS = {"blackhole": BLACKHOLE, "wormhole": WORMHOLE}

@@ -273,26 +273,23 @@ captured prefix and stepped for every token.
 
 | | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| LLM alone, all 164 steps | `0.949 s` | `1.020 s` | `1.401 s` |
-| batch schedule, first audio = total | `1.560 s` | `1.770 s` | `2.391 s` |
-| streaming, first audio | `1.306 s` | `1.539 s` | `2.133 s` |
-| streaming, total | `2.127 s` | `2.536 s` | `3.512 s` |
-| first-audio gain | **`1.19×`** | **`1.15×`** | **`1.12×`** |
-| cost of interleaving, on the total | `1.36×` | `1.43×` | `1.47×` |
-| streamed total ÷ audio produced | `0.650` | `0.776` | `1.074` |
+| LLM alone, all 164 steps | `0.949 s` | `1.020 s` | `1.104 s` |
+| batch schedule, first audio = total | `1.560 s` | `1.770 s` | `1.956 s` |
+| streaming, first audio | `1.306 s` | `1.539 s` | `1.653 s` |
+| streaming, total | `2.127 s` | `2.536 s` | `2.698 s` |
+| first-audio gain | **`1.19×`** | **`1.15×`** | **`1.18×`** |
+| cost of interleaving, on the total | `1.36×` | `1.43×` | `1.38×` |
+| streamed total ÷ audio produced | `0.650` | `0.776` | **`0.825`** |
 
 Each column is one run. The n300 figures move by a few per cent between runs, and the
 last row is the one that crosses a threshold, so its distribution is given below rather
 than inferred from this column.
 
-**The n300 column here predates the 2026-09-04 defaults and understates that board.** The
-faster decode step reaches the interleaved schedule too: on the certification run of
-2026-09-04 the streamed total is `2.994 s` for the same `3.27 s` of audio, a ratio of
-`0.914` against the `1.050` below. That is *under* real time, on a gate this board had
-never cleared. It is one run, and the 13-run characterisation beneath was made on the old
-default, so the honest position is that **this gate needs re-characterising at the new
-default before its verdict changes** — the same discipline that turned a 3-of-3 pass into
-a straddle on the RTF gate one section earlier. Recorded here rather than acted on.
+**The n300 column moved on 2026-09-04, and this gate is now met there.** The levers were
+chosen to speed the AR decode step for the RTF gate; this schedule is dominated by the
+flow decoder and vocoder *per chunk*, so no gain was expected here. It arrived anyway,
+because the decode runs once per token and the chunk work does not: a 13 % faster step
+took the ratio from `1.040` to `0.825`.
 
 The first row is the control the other rows are read against: the same 164 decode steps
 with neither schedule's flow or vocoder work attached. Subtracting it says what
@@ -313,13 +310,17 @@ decoder rather than the in-place one, both to avoid the same hang; with the warm
 place it uses the suite's region and the decoder `kv_inplace_default` selects, and the
 n300 schedule runs 9–15 % faster than it did without them.
 
-What the skip was hiding is the last row. **n300 does not reliably sustain real time on
-the interleaved schedule**: across 13 runs the streamed total came in between 0.961 and
-1.087 times the audio produced, mean 1.040, clearing 1.0 twice. The threshold sits
-inside the spread, so this is enforced as a straddling band rather than as a pass or a
-fail — see `tests/perf/gates.py`. Blackhole clears it every run with 35 % of headroom.
-The lever is the flow decoder and vocoder per chunk rather than the AR decode: n300's
-8×8 grid runs that work well behind a 13×10 Blackhole grid.
+What the skip was hiding was a real limitation, and it has since closed. Characterised
+in September 2025 at the then-defaults, n300 did **not** reliably sustain real time: 13
+runs between `0.961` and `1.087`, mean `1.040`, clearing `1.0` twice — enforced as a
+straddling band rather than a pass or a fail. Re-characterised at the 2026-09-04
+defaults it clears **9 runs of 9**, between `0.814` and `0.886`, median `0.825`, with
+11 % of headroom at its worst run, and the gate is a `Meets` on both architectures.
+
+The re-characterisation was not optional and not a hunch: two perf configurations failed
+with *"measured 0.884, outside the recorded band"* — a value that had left the band on
+the fast side, which `gates.py` treats as a failure exactly because a stale published
+figure is the thing it exists to catch. It was right; the figure was stale by 20 %.
 
 Chunked synthesis is unaffected on Wormhole, and always was: the content check,
 `test_device_streamed_matches_non_streamed`, runs on n300 and passes.
