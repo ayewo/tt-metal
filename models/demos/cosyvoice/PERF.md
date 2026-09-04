@@ -424,22 +424,29 @@ from this document; each row names where its number lives.
 | flag | default | what it does | what it is worth |
 |---|---|---|---|
 | `COSYVOICE_KV_INPLACE` | follows `device.arch()` — on for Wormhole, off for Blackhole | writes the KV cache with `ttnn.update_cache` instead of rebuilding it | §3.2, §6 |
-| `COSYVOICE_FF2_GRID` | unset | explicit core grid for the FFN's second linear at decode (`T == 1` only) | §3.2; Part II §4.2 |
+| `COSYVOICE_FF2_GRID` | follows `device.arch()` — `8x2` on Wormhole, TTNN's own choice on Blackhole; `off` forces TTNN's | explicit core grid for the FFN's second linear at decode (`T == 1` only) | §3.2; Part II §4.2 |
 | `COSYVOICE_SDPA_DECODE` | `1` | fused `sdpa_decode` for the AR decoder's relative-position attention | Part II §1.1 |
 | `COSYVOICE_SDPA` | `1` | fused SDPA in the flow estimator | Part II §2.1 |
 | `COSYVOICE_CFM_TRACE_CACHE` | `1` | keeps the CFM estimator trace across utterances of the same mel length | Part II §2.2 |
 | `COSYVOICE_GN_PERMUTE` | unset (matmul form) | restores the permute-based GroupNorm | Part II §2.3 |
 | `COSYVOICE_FLOW_STEPS` | `10` | Euler solver depth | Part II §2.2 |
-| `COSYVOICE_FIDELITY` | `HiFi4` | math fidelity for the matmuls | §7 |
+| `COSYVOICE_FIDELITY` | `HiFi4` | math fidelity for the matmuls, in all three stages | §6 — `HiFi3` and `HiFi2` are both a wash |
 | `COSYVOICE_HIFT_TRACE` | unset (per-stream heuristic) | forces vocoder trace capture on or off | Part II §3 |
-| `COSYVOICE_WEIGHT_BF8` | `0` | `bfloat8_b` decoder linear weights | §6 — a memory option, not a speed one |
-| `COSYVOICE_FLOW_BF8` | `0` | `bfloat8_b` flow-estimator weights | carries its own measurement |
+| `COSYVOICE_WEIGHT_BF8` | follows `device.arch()` — on for Wormhole, off for Blackhole | `bfloat8_b` decoder linear weights | §6 |
+| `COSYVOICE_FLOW_BF8` | `0` | `bfloat8_b` flow-estimator weights | §6 — measured, and it buys nothing |
 | `COSYVOICE_FP32_ACC` | `1` | fp32 accumulation in the vocoder convolutions | Part II §3.2 |
 | `COSYVOICE_CONV_PREPARE` | unset (per-geometry verification) | overrides the prepared-weight verdict | Part II §3.2 |
 | `COSYVOICE_INPUTS` | unset | where the prompt `.npz` files live, for the two API tests | `docs/VALIDATION.md` |
 
-Two flags are opt-in because the best setting is not portable, not because they are
-risky: `COSYVOICE_FF2_GRID`, and `COSYVOICE_KV_INPLACE` on Blackhole.
+Three flags follow `device.arch()` rather than carrying one setting for both parts —
+`COSYVOICE_KV_INPLACE`, `COSYVOICE_WEIGHT_BF8` and `COSYVOICE_FF2_GRID` — because each is
+worth something real on Wormhole and nothing on Blackhole. Each is overridable in both
+directions, and each names the function that resolves it in `tt/llm/decoder.py`, so the
+model and the tests that measure the model read one place.
+
+`COSYVOICE_FF2_GRID` still exists as a flag rather than being hard-coded because the best
+*shape* is not portable: `4x8`, the same sixteen cores transposed, manages `1.15×` on
+n300 against `8x2`'s `1.50×`.
 
 ## 10. Known limitations
 
@@ -606,9 +613,13 @@ what the fused matmul saved). Op count is a proxy for cost, not the cost.
 
 Three candidates, measured rather than reasoned about:
 
-* Not weight bandwidth. `bfloat8_b` weights measure `1.00×` at two different
-  effective bandwidths, so `COSYVOICE_WEIGHT_BF8` ships as a *memory* option
-  (352 → 176 MB), not a speed one.
+* Not weight bandwidth **on Blackhole**, which is the part this was measured on, and
+  the qualifier turned out to matter. `bfloat8_b` weights measure `1.00×` here at two
+  different effective bandwidths. On n300 the same A/B measures `1.06×` on the step and
+  `0.540 → 0.524` end to end, so `COSYVOICE_WEIGHT_BF8` is now the Wormhole default and
+  stays off on Blackhole (Part I §6, §9). The 352 → 176 MB is a bonus on both.
+  A conclusion drawn on one part and stated for both is how the lever that closed
+  Wormhole's `RTF < 0.5` gap went unpulled for a month.
 * Not the four linears. They are 34 % of the step (`2.82 ms` across 14 layers) and
   already near TTNN's default grid optimum.
 * A per-op dispatch floor of ~6.3 µs, flat in tensor size, across the ~280
