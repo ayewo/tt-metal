@@ -93,14 +93,20 @@ stops doing so, the run fails and both are updated together.
 
 | requirement | target | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|---:|
-| Semantic token generation | `>= 30 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `130.4 tok/s` ✅ |
-| Semantic token generation (stretch) | `>= 60 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `130.4 tok/s` ✅ |
-| Real-time factor | `< 0.5` | `0.343` ✅ | `0.370` ✅ | `0.550` ❌ |
-| Real-time factor (stretch) | `< 0.2` | `0.343` ❌ | `0.370` ❌ | `0.550` ❌ |
+| Semantic token generation | `>= 30 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `150.7 tok/s` ✅ |
+| Semantic token generation (stretch) | `>= 60 tok/s` | `201.2 tok/s` ✅ | `190.5 tok/s` ✅ | `150.7 tok/s` ✅ |
+| Real-time factor | `< 0.5` | `0.343` ✅ | `0.370` ✅ | `0.487` — straddles, 7 of 18 |
+| Real-time factor (stretch) | `< 0.2` | `0.343` ❌ | `0.370` ❌ | `0.487` ❌ |
 
 Best of each configuration; §3 breaks them out. `RTF < 0.5` is the only requirement
-whose verdict differs by architecture, and the gap is the compute grid: 64 cores against
-130, on a decode step dominated by weight traffic.
+whose verdict differs by architecture, and n300's is a **straddle rather than a miss**:
+over eighteen runs of the shipped configuration the figure ranges `0.489`–`0.524` with a
+median of `0.5025` and clears `0.5` seven times. Eighteen runs of the previous default
+ranged `0.535`–`0.562` and cleared it none. What closed most of that gap was two levers
+already in the tree — `bfloat8_b` decoder weights, whose flag was read by nothing, and the
+`8x2` FF2 core grid, which was opt-in on the strength of cross-session comparisons; both
+are now Wormhole defaults (§9). What remains is the compute grid: 64 cores against 130, on
+a decode step whose linears are already near TTNN's optimum.
 
 `RTF < 0.2` is not met anywhere and has a floor rather than being simply unmet —
 see §3.4.
@@ -125,10 +131,15 @@ the LLM does not.
 
 | stage | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| LLM (14-block AR decoder, traced, fused attention) | `5.72 ms/token × 164 = 0.938 s` · RTF `0.287` | `5.92 ms/token × 164 = 0.972 s` · RTF `0.297` | `7.67 ms/token × 164 = 1.257 s` · RTF `0.384` |
-| Flow decoder (10 Euler steps, traced, fused SDPA) | `0.255 s` · RTF `0.078` | `0.286 s` · RTF `0.087` | `0.473 s` · RTF `0.144` |
-| HiFT vocoder | `0.047 s` · RTF `0.014` | `0.067 s` · RTF `0.021` | `0.072 s` · RTF `0.022` |
-| **Total** | **`1.240 s` · RTF `0.379`** | **`1.325 s` · RTF `0.405`** | **`1.802 s` · RTF `0.550`** |
+| LLM (14-block AR decoder, traced, fused attention) | `5.72 ms/token × 164 = 0.938 s` · RTF `0.287` | `5.92 ms/token × 164 = 0.972 s` · RTF `0.297` | `6.64 ms/token × 164 = 1.088 s` · RTF `0.332` |
+| Flow decoder (10 Euler steps, traced, fused SDPA) | `0.255 s` · RTF `0.078` | `0.286 s` · RTF `0.087` | `0.444 s` · RTF `0.136` |
+| HiFT vocoder | `0.047 s` · RTF `0.014` | `0.067 s` · RTF `0.021` | `0.063 s` · RTF `0.019` |
+| **Total** | **`1.240 s` · RTF `0.379`** | **`1.325 s` · RTF `0.405`** | **`1.596 s` · RTF `0.487`** |
+
+The n300 column moved on 2026-09-04, when `bfloat8_b` weights and the `8x2` FF2 grid
+became its defaults: the decode step went `7.67 → 6.64 ms/token` and the total
+`1.802 → 1.596 s`. Blackhole is unchanged — neither lever does anything there, which is
+why both follow `device.arch()` rather than shipping one setting for both parts.
 
 The LLM is 76 % of an utterance at `p150a`'s default settings, the flow decoder 21 % and
 the vocoder 4 %. That split is why every optimisation in Part II is aimed at the decode
@@ -139,9 +150,9 @@ reach (§3.4).
 
 | configuration | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| default | `0.379` | `0.405` | `0.550` |
-| `COSYVOICE_FF2_GRID=8x2` | `0.355` | `0.377` | `0.562` |
-| `COSYVOICE_KV_INPLACE=1` | `0.343` | `0.370` | `0.566` |
+| default | `0.379` | `0.405` | `0.487` |
+| `COSYVOICE_FF2_GRID=8x2` | `0.355` | `0.377` | measures the default |
+| `COSYVOICE_KV_INPLACE=1` | `0.343` | `0.370` | measures the default |
 
 The defaults differ by architecture on purpose: `kv_inplace_default` reads
 `device.arch()` and turns the in-place KV cache on for Wormhole and off for Blackhole,
@@ -149,22 +160,35 @@ because the trade differs by part (Part II §1.4). So the n300 "default" column 
 *is* the in-place cache, and its explicit row measures the same thing twice — which is
 worth keeping, because a drift between them would mean the default stopped being read.
 
-The n300 column reads as though both flags cost something, and the honest reading is
-that neither does much there: `0.550`, `0.562` and `0.566` are three runs of a
-measurement whose flow stage moves about 5 % between them, and `COSYVOICE_KV_INPLACE=1`
-is by construction the same configuration as the default. `COSYVOICE_FF2_GRID` is the
-one real comparison in that column, and it is worth `1.04×` on the decode step alone
-(§4, `11.63 → 11.15 ms` at `B = 1`) while the end-to-end figure it feeds is dominated by a flow stage the flag does
-not touch. On Blackhole, where the LLM is a larger share and the flags are genuine
-changes, both move the number and in the same direction each time.
+**Two of the n300 rows now re-measure the default**, because both flags became its
+default on 2026-09-04. That is worth keeping rather than deleting, for the reason above:
+a drift between a row and the default it re-measures would mean the architecture dispatch
+stopped being read, which is precisely the failure that hid `COSYVOICE_WEIGHT_BF8` for a
+month.
+
+Both were measured before being promoted, against a baseline bracketed in the same
+session rather than against another session's run:
+
+| n300, bracketed against baseline `0.539` | RTF | |
+|---|---:|---:|
+| `COSYVOICE_FF2_GRID=8x2` alone | `0.521` | `−3.4 %`, 3 of 3 |
+| `COSYVOICE_WEIGHT_BF8=1` alone | `0.524` | `−3.0 %`, 3 of 3 |
+| both, 18 runs | `0.5025` median | `−6.9 %` |
+
+The bracket is what made those readable. Measured *across* sessions
+`COSYVOICE_FF2_GRID` had come in below, level with and above the default on n300 in three
+successive full-suite runs, and was recorded here as not reliably positive on that basis.
+It is reliably positive; the earlier comparisons were between runs of a board that drifts
+measurably over hours — the baseline alone moves from `0.537`–`0.540` early in a session
+to `0.535`–`0.556` late in one.
 
 ### 3.3 Semantic-token throughput
 
 | configuration | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
-| default | `174.8 tok/s` | `168.8 tok/s` | `130.4 tok/s` |
-| `COSYVOICE_FF2_GRID=8x2` | `190.6 tok/s` | `183.4 tok/s` | `126.5 tok/s` |
-| `COSYVOICE_KV_INPLACE=1` | `201.2 tok/s` | `190.5 tok/s` | `126.4 tok/s` |
+| default | `174.8 tok/s` | `168.8 tok/s` | `150.7 tok/s` |
+| `COSYVOICE_FF2_GRID=8x2` | `190.6 tok/s` | `183.4 tok/s` | measures the default |
+| `COSYVOICE_KV_INPLACE=1` | `201.2 tok/s` | `190.5 tok/s` | measures the default |
 
 Against a `>= 30 tok/s` requirement and a `>= 60 tok/s` stretch target. The *untraced*
 control, measured in the same process, is in §6.
@@ -260,6 +284,15 @@ captured prefix and stepped for every token.
 Each column is one run. The n300 figures move by a few per cent between runs, and the
 last row is the one that crosses a threshold, so its distribution is given below rather
 than inferred from this column.
+
+**The n300 column here predates the 2026-09-04 defaults and understates that board.** The
+faster decode step reaches the interleaved schedule too: on the certification run of
+2026-09-04 the streamed total is `2.994 s` for the same `3.27 s` of audio, a ratio of
+`0.914` against the `1.050` below. That is *under* real time, on a gate this board had
+never cleared. It is one run, and the 13-run characterisation beneath was made on the old
+default, so the honest position is that **this gate needs re-characterising at the new
+default before its verdict changes** — the same discipline that turned a 3-of-3 pass into
+a straddle on the RTF gate one section earlier. Recorded here rather than acted on.
 
 The first row is the control the other rows are read against: the same 164 decode steps
 with neither schedule's flow or vocoder work attached. Subtracting it says what
